@@ -1,0 +1,189 @@
+---
+title: "Execution API Overview"
+description: "Execute code, run commands, and manage files within OpenSandbox environments"
+---
+
+The Execution API (execd) provides comprehensive capabilities for managing code execution, file operations, and system monitoring within sandboxed environments. All endpoints require token-based authentication via the `X-EXECD-ACCESS-TOKEN` header.
+
+## Base URL
+
+```
+http://localhost:44772
+```
+
+For production deployments, use your configured execd server URL.
+
+## Authentication
+
+All API requests must include the access token in the request header:
+
+```bash
+X-EXECD-ACCESS-TOKEN: your-access-token
+```
+
+The token is configured during server initialization and must be included with every request to the Execution API.
+
+## Key Features
+
+### Code Execution
+
+Execute code in multiple programming languages with stateful contexts:
+
+- **Multi-language Support**: Python, JavaScript, Bash, Java, and more
+- **Stateful Sessions**: Maintain execution state across multiple code runs
+- **Context Management**: Create, list, and delete execution contexts
+- **Real-time Output**: Stream execution results via Server-Sent Events (SSE)
+
+### Command Execution
+
+Run shell commands with flexible execution modes:
+
+- **Foreground Mode**: Execute commands with streaming output
+- **Background Mode**: Run long-running commands in detached mode
+- **Status Polling**: Check command status and retrieve logs
+- **Timeout Control**: Set maximum execution time limits
+- **Process Interruption**: Stop running commands on demand
+
+### File Operations
+
+Complete filesystem management capabilities:
+
+- **CRUD Operations**: Create, read, update, and delete files
+- **Directory Management**: Create and remove directories recursively
+- **Permissions**: Set Unix-style file permissions (owner, group, mode)
+- **File Search**: Search files using glob patterns
+- **Batch Operations**: Upload, download, move, and replace content in bulk
+
+### System Monitoring
+
+Real-time system resource tracking:
+
+- **CPU Metrics**: Monitor CPU usage and core count
+- **Memory Metrics**: Track total and used memory
+- **Real-time Streaming**: Watch metrics continuously via SSE
+- **Timestamped Data**: All metrics include Unix millisecond timestamps
+
+## Streaming Output (SSE)
+
+Code execution and command execution endpoints use Server-Sent Events (SSE) to stream real-time output. SSE provides a persistent HTTP connection that allows the server to push updates to the client as they occur.
+
+### Event Types
+
+The streaming API supports the following event types:
+
+| Event Type | Description |
+|------------|-------------|
+| `init` | Initialization event with session details |
+| `status` | Status update during execution |
+| `stdout` | Standard output stream data |
+| `stderr` | Standard error stream data |
+| `result` | Execution result with MIME-typed output |
+| `execution_complete` | Execution finished successfully |
+| `execution_count` | Jupyter-style execution counter |
+| `error` | Error information with traceback |
+| `ping` | Keep-alive heartbeat |
+
+### Event Format
+
+Each SSE event follows this structure:
+
+```
+data: {"type":"stdout","text":"Hello, World!\n","timestamp":1700000000000}
+
+data: {"type":"execution_complete","execution_time":150}
+
+```
+
+Events are separated by double newlines, and each event contains a JSON payload with the event type and associated data.
+
+## API Sections
+
+The Execution API is organized into the following sections:
+
+<CardGroup cols={2}>
+  <Card title="Code Interpreter" icon="code" href="/api/execution/code-interpreter">
+    Execute code in Python, JavaScript, and other languages with stateful contexts
+  </Card>
+  
+  <Card title="Command Execution" icon="terminal" href="/api/execution/commands">
+    Run shell commands with foreground/background modes and status polling
+  </Card>
+  
+  <Card title="Filesystem" icon="folder" href="/api/execution/filesystem">
+    Complete file and directory operations with permissions management
+  </Card>
+  
+  <Card title="Metrics" icon="chart-line" href="/api/execution/metrics">
+    Monitor CPU and memory usage in real-time
+  </Card>
+</CardGroup>
+
+## Error Handling
+
+The API uses standard HTTP status codes and returns structured error responses:
+
+### Error Response Format
+
+```json
+{
+  "code": "ERROR_CODE",
+  "message": "Human-readable error message"
+}
+```
+
+### Common Error Codes
+
+| Status Code | Error Code | Description |
+|-------------|------------|-------------|
+| 400 | `INVALID_REQUEST_BODY` | Invalid request format or missing required fields |
+| 404 | `FILE_NOT_FOUND` | File or resource not found |
+| 416 | `RANGE_NOT_SATISFIABLE` | Invalid HTTP range request |
+| 500 | `RUNTIME_ERROR` | Internal server error during operation |
+
+## Quick Start
+
+### Execute Python Code
+
+```bash
+curl -X POST http://localhost:44772/code \
+  -H "X-EXECD-ACCESS-TOKEN: your-token" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "code": "print(\"Hello, World!\")",
+    "context": {
+      "language": "python"
+    }
+  }'
+```
+
+### Run a Shell Command
+
+```bash
+curl -X POST http://localhost:44772/command \
+  -H "X-EXECD-ACCESS-TOKEN: your-token" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "command": "ls -la /workspace",
+    "cwd": "/workspace",
+    "background": false
+  }'
+```
+
+### Get System Metrics
+
+```bash
+curl -X GET http://localhost:44772/metrics \
+  -H "X-EXECD-ACCESS-TOKEN: your-token"
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Code Interpreter" icon="code" href="/api/execution/code-interpreter">
+    Learn about code execution endpoints
+  </Card>
+  
+  <Card title="Command Execution" icon="terminal" href="/api/execution/commands">
+    Explore command execution capabilities
+  </Card>
+</CardGroup>

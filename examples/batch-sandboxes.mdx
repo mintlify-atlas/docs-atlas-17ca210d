@@ -1,0 +1,413 @@
+---
+title: 'Batch Sandboxes'
+description: 'Create and manage multiple sandboxes efficiently using BatchSandbox resources'
+icon: 'layer-group'
+---
+
+The BatchSandbox custom resource enables efficient creation and management of multiple identical sandbox environments. This is particularly useful for high-throughput scenarios like reinforcement learning training, parallel testing, or multi-tenant applications.
+
+## Overview
+
+BatchSandbox provides:
+
+- **Flexible Creation Modes**: Pooled (using resource pools) or non-pooled sandbox creation
+- **Single and Batch Delivery**: Create one sandbox or hundreds with the same configuration
+- **Scalable Replica Management**: Control the number of sandbox instances through replica configuration
+- **Automatic Expiration**: Set TTL (time-to-live) for automatic cleanup
+- **Optional Task Scheduling**: Execute custom workloads within sandboxes
+- **Detailed Status Reporting**: Comprehensive metrics on replicas, allocations, and task states
+
+## Basic Batch Sandbox
+
+Create a batch of identical sandboxes without resource pooling:
+
+```yaml basic-batch.yaml
+apiVersion: sandbox.opensandbox.io/v1alpha1
+kind: BatchSandbox
+metadata:
+  name: basic-batch-sandbox
+  namespace: default
+spec:
+  replicas: 5  # Create 5 identical sandboxes
+  template:
+    spec:
+      containers:
+      - name: sandbox-container
+        image: nginx:latest
+        ports:
+        - containerPort: 80
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "100m"
+          limits:
+            memory: "512Mi"
+            cpu: "200m"
+```
+
+```bash
+kubectl apply -f basic-batch.yaml
+
+# Monitor creation
+kubectl get batchsandbox basic-batch-sandbox -w
+```
+
+## Pooled Batch Sandboxes
+
+For faster provisioning, use resource pools to maintain pre-warmed sandboxes:
+
+### Step 1: Create a Pool
+
+```yaml pool.yaml
+apiVersion: sandbox.opensandbox.io/v1alpha1
+kind: Pool
+metadata:
+  name: fast-pool
+  namespace: default
+spec:
+  template:
+    spec:
+      containers:
+      - name: sandbox
+        image: opensandbox/code-interpreter:v1.0.1
+        command: ["/bin/sh", "-c", "sleep infinity"]
+  capacitySpec:
+    bufferMax: 20    # Keep up to 20 pre-warmed sandboxes
+    bufferMin: 5     # Maintain at least 5 pre-warmed sandboxes
+    poolMax: 50      # Maximum total capacity
+    poolMin: 10      # Minimum total capacity
+```
+
+```bash
+kubectl apply -f pool.yaml
+
+# Wait for pool to warm up
+kubectl get pool fast-pool -w
+```
+
+### Step 2: Create Batch from Pool
+
+```yaml pooled-batch.yaml
+apiVersion: sandbox.opensandbox.io/v1alpha1
+kind: BatchSandbox
+metadata:
+  name: pooled-batch-sandbox
+  namespace: default
+spec:
+  replicas: 10
+  poolRef: fast-pool  # Use pre-warmed sandboxes from the pool
+  expireTime: "2026-12-31T23:59:59Z"  # Auto-delete after this time
+```
+
+```bash
+kubectl apply -f pooled-batch.yaml
+
+# Sandboxes are provisioned almost instantly
+kubectl get batchsandbox pooled-batch-sandbox
+```
+
+## Automatic Expiration
+
+Set expiration times for automatic cleanup:
+
+```yaml expiring-batch.yaml
+apiVersion: sandbox.opensandbox.io/v1alpha1
+kind: BatchSandbox
+metadata:
+  name: expiring-batch
+  namespace: default
+spec:
+  replicas: 3
+  poolRef: fast-pool
+  expireTime: "2026-03-02T12:00:00Z"  # Auto-delete on March 2, 2026
+```
+
+<Info>
+  Expired sandboxes are automatically cleaned up and returned to the pool (if pooled) or deleted (if non-pooled).
+</Info>
+
+## Heterogeneous Task Distribution
+
+Execute different tasks across sandboxes in a batch using `shardTaskPatches`:
+
+```yaml heterogeneous-tasks.yaml
+apiVersion: sandbox.opensandbox.io/v1alpha1
+kind: BatchSandbox
+metadata:
+  name: task-batch
+  namespace: default
+spec:
+  replicas: 3
+  poolRef: fast-pool
+  taskTemplate:
+    spec:
+      process:
+        command: ["echo"]
+        args: ["Default message"]
+        env:
+        - name: TASK_TYPE
+          value: "default"
+  shardTaskPatches:
+  - spec:
+      process:
+        command: ["python"]
+        args: ["-m", "http.server", "8080"]
+        env:
+        - name: TASK_TYPE
+          value: "web-server"
+  - spec:
+      process:
+        command: ["bash"]
+        args: ["-c", "while true; do date; sleep 5; done"]
+        env:
+        - name: TASK_TYPE
+          value: "logger"
+  - spec:
+      process:
+        command: ["sleep"]
+        args: ["3600"]
+        env:
+        - name: TASK_TYPE
+          value: "idle"
+```
+
+```bash
+kubectl apply -f heterogeneous-tasks.yaml
+
+# Monitor task execution
+kubectl get batchsandbox task-batch -o wide
+```
+
+<Note>
+  Each sandbox in the batch receives a different task configuration based on its shard index.
+</Note>
+
+## Scaling Batch Sandboxes
+
+Dynamically adjust the number of sandboxes:
+
+```bash
+# Scale up to 20 sandboxes
+kubectl patch batchsandbox pooled-batch-sandbox \
+  -p '{"spec":{"replicas":20}}' --type=merge
+
+# Scale down to 5 sandboxes
+kubectl patch batchsandbox pooled-batch-sandbox \
+  -p '{"spec":{"replicas":5}}' --type=merge
+```
+
+## Monitoring Batch Status
+
+### View Status Summary
+
+```bash
+kubectl get batchsandbox task-batch -o wide
+```
+
+Output:
+```
+NAME        DESIRED TOTAL ALLOCATED READY TASK_RUNNING TASK_SUCCEED TASK_FAILED AGE
+task-batch  3       3     3         3     0            3            0           2m
+```
+
+### Get Sandbox Endpoints
+
+```bash
+kubectl get batchsandbox task-batch \
+  -o jsonpath='{.metadata.annotations.sandbox\.opensandbox\.io/endpoints}' | jq
+```
+
+Output:
+```json
+[
+  {"sandbox_id": "0", "ip": "10.244.1.10"},
+  {"sandbox_id": "1", "ip": "10.244.1.11"},
+  {"sandbox_id": "2", "ip": "10.244.1.12"}
+]
+```
+
+### Check Detailed Status
+
+```bash
+kubectl describe batchsandbox task-batch
+```
+
+## Cleanup and Deletion
+
+### Delete BatchSandbox
+
+```bash
+# Delete the batch (tasks are automatically stopped first)
+kubectl delete batchsandbox task-batch
+
+# Monitor deletion
+kubectl get batchsandbox task-batch -w
+```
+
+<Warning>
+  When deleting a BatchSandbox with running tasks, the controller stops all tasks before deleting resources.
+</Warning>
+
+### Delete Pool
+
+```bash
+# Delete the pool (allocated sandboxes are returned first)
+kubectl delete pool fast-pool
+```
+
+## Python SDK Integration
+
+Use BatchSandbox with the OpenSandbox Python SDK:
+
+```python batch_example.py
+import asyncio
+import os
+from datetime import timedelta
+from opensandbox import Sandbox
+from opensandbox.config import ConnectionConfig
+
+async def main():
+    config = ConnectionConfig(
+        domain=os.getenv("SANDBOX_DOMAIN", "localhost:8080"),
+        api_key=os.getenv("SANDBOX_API_KEY"),
+        request_timeout=timedelta(seconds=60),
+    )
+
+    # Create a sandbox (will be allocated from BatchSandbox/Pool)
+    sandbox = await Sandbox.create(
+        "opensandbox/code-interpreter:v1.0.1",
+        connection_config=config,
+        timeout=timedelta(minutes=10),
+    )
+
+    async with sandbox:
+        execution = await sandbox.commands.run("echo hello from batch sandbox")
+        stdout = execution.logs.stdout[0].text if execution.logs.stdout else ""
+        print(f"Output: {stdout}")
+        await sandbox.kill()
+
+if __name__ == "__main__":
+    asyncio.run(main())
+```
+
+```bash
+uv run python batch_example.py
+```
+
+## Performance Characteristics
+
+### Provisioning Speed Comparison
+
+| Method | Time for 100 Sandboxes |
+|--------|------------------------|
+| Non-pooled | ~30-60 seconds |
+| Pooled (cold pool) | ~10-20 seconds |
+| Pooled (warm pool) | **< 1 second** |
+
+### Resource Efficiency
+
+- **Memory Overhead**: ~50MB per pre-warmed sandbox
+- **CPU Overhead**: Minimal when idle
+- **Network**: Single control plane connection per batch
+
+## Best Practices
+
+<AccordionGroup>
+  <Accordion title="Pool Sizing">
+    - Set `bufferMin` to your average concurrent usage
+    - Set `bufferMax` to handle traffic spikes
+    - Set `poolMax` based on cluster capacity
+    - Monitor pool metrics to adjust sizing
+  </Accordion>
+
+  <Accordion title="Task Management">
+    - Use process-based tasks for sidecar patterns
+    - Set appropriate timeouts for long-running tasks
+    - Use `shardTaskPatches` for heterogeneous workloads
+    - Clean up completed BatchSandboxes promptly
+  </Accordion>
+
+  <Accordion title="Resource Limits">
+    - Always set resource requests and limits
+    - Use separate pools for different resource profiles
+    - Monitor pool capacity and adjust limits accordingly
+    - Consider cluster autoscaling for dynamic workloads
+  </Accordion>
+
+  <Accordion title="Expiration Strategy">
+    - Set `expireTime` for temporary sandboxes
+    - Use shorter TTLs for development/testing
+    - Longer TTLs for production workloads
+    - Monitor expired sandbox cleanup
+  </Accordion>
+</AccordionGroup>
+
+## Use Cases
+
+### Reinforcement Learning Training
+
+Create hundreds of parallel environments for RL agents:
+
+```yaml rl-batch.yaml
+apiVersion: sandbox.opensandbox.io/v1alpha1
+kind: BatchSandbox
+metadata:
+  name: rl-training-batch
+spec:
+  replicas: 100  # 100 parallel environments
+  poolRef: rl-pool
+  taskTemplate:
+    spec:
+      process:
+        command: ["python"]
+        args: ["/workspace/train_agent.py"]
+```
+
+### Parallel Testing
+
+Run test suites across multiple sandboxes:
+
+```yaml test-batch.yaml
+apiVersion: sandbox.opensandbox.io/v1alpha1
+kind: BatchSandbox
+metadata:
+  name: test-runners
+spec:
+  replicas: 10
+  poolRef: test-pool
+  shardTaskPatches:
+  - spec:
+      process:
+        command: ["pytest"]
+        args: ["tests/unit"]
+  - spec:
+      process:
+        command: ["pytest"]
+        args: ["tests/integration"]
+```
+
+### Multi-Tenant Development
+
+Provide isolated environments for multiple users:
+
+```yaml tenant-batch.yaml
+apiVersion: sandbox.opensandbox.io/v1alpha1
+kind: BatchSandbox
+metadata:
+  name: dev-environments
+spec:
+  replicas: 50  # 50 developer environments
+  poolRef: dev-pool
+  expireTime: "2026-03-08T00:00:00Z"  # Weekly cleanup
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Kubernetes Deployment" icon="dharmachakra" href="/examples/kubernetes-deployment">
+    Full Kubernetes controller setup
+  </Card>
+  <Card title="RL Training" icon="brain" href="/examples/rl-training">
+    Reinforcement learning workflows
+  </Card>
+</CardGroup>

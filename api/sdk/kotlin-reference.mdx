@@ -1,0 +1,597 @@
+---
+title: Kotlin SDK Reference
+description: Complete API reference for the OpenSandbox Kotlin/Java SDK
+---
+
+The OpenSandbox Kotlin SDK provides secure, isolated execution environments with comprehensive file system access, command execution, and resource management capabilities.
+
+## Installation
+
+<CodeGroup>
+```kotlin Gradle (Kotlin DSL)
+dependencies {
+    implementation("com.alibaba.opensandbox:sandbox:{latest_version}")
+}
+```
+
+```xml Maven
+<dependency>
+    <groupId>com.alibaba.opensandbox</groupId>
+    <artifactId>sandbox</artifactId>
+    <version>{latest_version}</version>
+</dependency>
+```
+</CodeGroup>
+
+## Core Classes
+
+### Sandbox
+
+Main class for creating and managing sandbox instances.
+
+#### Builder Methods
+
+##### build()
+
+Create a new sandbox instance using the builder pattern.
+
+```java
+import com.alibaba.opensandbox.sandbox.Sandbox;
+import com.alibaba.opensandbox.sandbox.config.ConnectionConfig;
+import java.time.Duration;
+
+ConnectionConfig config = ConnectionConfig.builder()
+    .domain("api.opensandbox.io")
+    .apiKey("your-api-key")
+    .build();
+
+try (Sandbox sandbox = Sandbox.builder()
+        .connectionConfig(config)
+        .image("python:3.11")
+        .timeout(Duration.ofMinutes(30))
+        .resource(map -> {
+            map.put("cpu", "2");
+            map.put("memory", "4Gi");
+        })
+        .env("PYTHONPATH", "/workspace")
+        .build()) {
+
+    // Use sandbox
+    sandbox.commands().run("python script.py");
+}
+```
+
+<ParamField path="connectionConfig" type="ConnectionConfig" required>
+  Connection configuration for API server.
+</ParamField>
+
+<ParamField path="image" type="String" required>
+  Docker image to use.
+</ParamField>
+
+<ParamField path="timeout" type="Duration" default="Duration.ofMinutes(10)">
+  Automatic termination timeout.
+</ParamField>
+
+<ParamField path="entrypoint" type="List<String>" default='["tail", "-f", "/dev/null"]'>
+  Container entrypoint command.
+</ParamField>
+
+<ParamField path="resource" type="Map<String, String>" default='{"cpu": "1", "memory": "2Gi"}'>
+  CPU and memory limits.
+</ParamField>
+
+<ParamField path="env" type="Map<String, String>">
+  Environment variables.
+</ParamField>
+
+<ParamField path="metadata" type="Map<String, String>">
+  Custom metadata tags.
+</ParamField>
+
+<ParamField path="networkPolicy" type="NetworkPolicy">
+  Optional outbound network policy (egress).
+</ParamField>
+
+<ParamField path="readyTimeout" type="Duration" default="Duration.ofSeconds(30)">
+  Maximum time to wait for sandbox to be ready.
+</ParamField>
+
+<ParamField path="healthCheck" type="Function<Sandbox, Boolean>">
+  Custom health check function.
+</ParamField>
+
+<ResponseField name="return" type="Sandbox">
+  Fully configured and ready Sandbox instance.
+</ResponseField>
+
+#### Instance Methods
+
+##### getInfo()
+
+Get the current status of the sandbox.
+
+```java
+SandboxInfo info = sandbox.getInfo();
+System.out.println("State: " + info.getStatus().getState());
+```
+
+<ResponseField name="return" type="SandboxInfo">
+  Current sandbox status including state and metadata.
+</ResponseField>
+
+##### getEndpoint()
+
+Get a specific network endpoint for the sandbox.
+
+```java
+SandboxEndpoint endpoint = sandbox.getEndpoint(80);
+System.out.println("Endpoint: " + endpoint.getEndpoint());
+```
+
+<ParamField path="port" type="int" required>
+  The port number to get the endpoint for.
+</ParamField>
+
+<ResponseField name="return" type="SandboxEndpoint">
+  Endpoint information including connection details.
+</ResponseField>
+
+##### renew()
+
+Renew the sandbox expiration time.
+
+```java
+sandbox.renew(Duration.ofMinutes(30));
+```
+
+<ParamField path="timeout" type="Duration" required>
+  Duration to add to the current time to set the new expiration.
+</ParamField>
+
+<ResponseField name="return" type="void">
+  Method completes when renewal is successful.
+</ResponseField>
+
+##### pause()
+
+Pause the sandbox while preserving its state.
+
+```java
+sandbox.pause();
+```
+
+<ResponseField name="return" type="void">
+  Method completes when sandbox is paused.
+</ResponseField>
+
+##### resume()
+
+Resume a previously paused sandbox.
+
+```java
+sandbox.resume();
+```
+
+<ResponseField name="return" type="void">
+  Method completes when sandbox is resumed.
+</ResponseField>
+
+##### kill()
+
+Terminate the remote sandbox instance.
+
+```java
+sandbox.kill();
+```
+
+<ResponseField name="return" type="void">
+  Method completes when sandbox is terminated.
+</ResponseField>
+
+##### close()
+
+Close local resources associated with the sandbox.
+
+```java
+sandbox.close();
+```
+
+<ResponseField name="return" type="void">
+  Method completes when resources are closed.
+</ResponseField>
+
+#### Properties
+
+##### commands()
+
+Provides access to command execution operations.
+
+```java
+Execution execution = sandbox.commands().run("echo 'Hello World'");
+System.out.println(execution.getLogs().getStdout().get(0).getText());
+```
+
+<ResponseField name="return" type="Commands">
+  Command execution interface.
+</ResponseField>
+
+##### files()
+
+Provides access to file system operations.
+
+```java
+sandbox.files().write(List.of(
+    WriteEntry.builder()
+        .path("/tmp/hello.txt")
+        .data("Hello World")
+        .mode(644)
+        .build()
+));
+String content = sandbox.files().readFile("/tmp/hello.txt", "UTF-8", null);
+```
+
+<ResponseField name="return" type="Filesystem">
+  File system operations interface.
+</ResponseField>
+
+### SandboxManager
+
+Administrative interface for managing multiple sandbox instances.
+
+#### Builder Methods
+
+##### build()
+
+Create a SandboxManager instance.
+
+```java
+import com.alibaba.opensandbox.sandbox.SandboxManager;
+
+SandboxManager manager = SandboxManager.builder()
+    .connectionConfig(config)
+    .build();
+```
+
+<ParamField path="connectionConfig" type="ConnectionConfig" required>
+  Connection configuration.
+</ParamField>
+
+<ResponseField name="return" type="SandboxManager">
+  Configured sandbox manager instance.
+</ResponseField>
+
+#### Instance Methods
+
+##### listSandboxInfos()
+
+List sandboxes with filtering options.
+
+```java
+import com.alibaba.opensandbox.sandbox.domain.models.sandboxes.SandboxState;
+
+PagedSandboxInfos sandboxes = manager.listSandboxInfos(
+    SandboxFilter.builder()
+        .states(SandboxState.RUNNING)
+        .pageSize(10)
+        .page(1)
+        .build()
+);
+
+sandboxes.getSandboxInfos().forEach(info ->
+    System.out.println("Found sandbox: " + info.getId())
+);
+```
+
+<ParamField path="filter" type="SandboxFilter" required>
+  Filter criteria for sandbox listing.
+</ParamField>
+
+<ResponseField name="return" type="PagedSandboxInfos">
+  Paged sandbox information matching the filter criteria.
+</ResponseField>
+
+##### killSandbox()
+
+Terminate a single sandbox.
+
+```java
+manager.killSandbox("sandbox-id");
+```
+
+<ParamField path="sandboxId" type="String" required>
+  Sandbox ID to terminate.
+</ParamField>
+
+<ResponseField name="return" type="void">
+  Method completes when sandbox is terminated.
+</ResponseField>
+
+##### close()
+
+Close local resources associated with the manager.
+
+```java
+manager.close();
+```
+
+<ResponseField name="return" type="void">
+  Method completes when resources are closed.
+</ResponseField>
+
+## Service Interfaces
+
+### Commands
+
+Command execution service for sandbox environments.
+
+#### run()
+
+Execute a shell command in the sandbox.
+
+```java
+import com.alibaba.opensandbox.sandbox.domain.models.execd.executions.Execution;
+import com.alibaba.opensandbox.sandbox.domain.models.execd.ExecutionHandlers;
+
+// Simple execution
+Execution execution = sandbox.commands().run("echo 'Hello World'");
+System.out.println(execution.getLogs().getStdout().get(0).getText());
+
+// With handlers
+ExecutionHandlers handlers = ExecutionHandlers.builder()
+    .onStdout(msg -> System.out.println("STDOUT: " + msg.getText()))
+    .onStderr(msg -> System.err.println("STDERR: " + msg.getText()))
+    .onExecutionComplete(complete ->
+        System.out.println("Command finished in " + complete.getExecutionTimeInMillis() + "ms")
+    )
+    .build();
+
+RunCommandRequest request = RunCommandRequest.builder()
+    .command("for i in {1..5}; do echo \"Count $i\"; sleep 0.5; done")
+    .handlers(handlers)
+    .build();
+
+sandbox.commands().run(request);
+```
+
+<ParamField path="command" type="String" required>
+  Shell command text to execute.
+</ParamField>
+
+<ParamField path="request" type="RunCommandRequest">
+  Command request with options and handlers.
+</ParamField>
+
+<ResponseField name="return" type="Execution">
+  Execution handle representing the running command.
+</ResponseField>
+
+### Filesystem
+
+Filesystem operations service for sandbox environments.
+
+#### readFile()
+
+Read the content of a file as a string.
+
+```java
+String content = sandbox.files().readFile("/tmp/hello.txt", "UTF-8", null);
+System.out.println("Content: " + content);
+```
+
+<ParamField path="path" type="String" required>
+  The absolute or relative path to the file to read.
+</ParamField>
+
+<ParamField path="encoding" type="String" default="UTF-8">
+  Character encoding for the file content.
+</ParamField>
+
+<ParamField path="rangeHeader" type="String">
+  HTTP byte range to read (e.g., "bytes=0-1023").
+</ParamField>
+
+<ResponseField name="return" type="String">
+  The file content as a string.
+</ResponseField>
+
+#### write()
+
+Write content to files.
+
+```java
+import com.alibaba.opensandbox.sandbox.domain.models.filesystem.WriteEntry;
+
+sandbox.files().write(List.of(
+    WriteEntry.builder()
+        .path("/tmp/hello.txt")
+        .data("Hello World")
+        .mode(644)
+        .build()
+));
+```
+
+<ParamField path="entries" type="List<WriteEntry>" required>
+  List of write entries specifying files and their content.
+</ParamField>
+
+<ResponseField name="return" type="void">
+  Method completes when files are written.
+</ResponseField>
+
+#### deleteFiles()
+
+Delete the specified files.
+
+```java
+sandbox.files().deleteFiles(List.of("/tmp/hello.txt"));
+```
+
+<ParamField path="paths" type="List<String>" required>
+  List of file paths to delete.
+</ParamField>
+
+<ResponseField name="return" type="void">
+  Method completes when files are deleted.
+</ResponseField>
+
+#### search()
+
+Search for files and directories.
+
+```java
+import com.alibaba.opensandbox.sandbox.domain.models.filesystem.SearchEntry;
+import com.alibaba.opensandbox.sandbox.domain.models.filesystem.EntryInfo;
+
+List<EntryInfo> files = sandbox.files().search(
+    SearchEntry.builder()
+        .path("/tmp")
+        .pattern("*.txt")
+        .build()
+);
+files.forEach(f -> System.out.println("Found: " + f.getPath()));
+```
+
+<ParamField path="entry" type="SearchEntry" required>
+  Search entry containing search parameters and criteria.
+</ParamField>
+
+<ResponseField name="return" type="List<EntryInfo>">
+  List of matching file/directory information.
+</ResponseField>
+
+## Configuration
+
+### ConnectionConfig
+
+Connection configuration for API server communication.
+
+```java
+import com.alibaba.opensandbox.sandbox.config.ConnectionConfig;
+import okhttp3.ConnectionPool;
+import java.time.Duration;
+import java.util.concurrent.TimeUnit;
+
+// Basic configuration
+ConnectionConfig config = ConnectionConfig.builder()
+    .apiKey("your-key")
+    .domain("api.opensandbox.io")
+    .requestTimeout(Duration.ofSeconds(60))
+    .build();
+
+// Advanced: Shared Connection Pool
+ConnectionPool sharedPool = new ConnectionPool(50, 30, TimeUnit.SECONDS);
+
+ConnectionConfig sharedConfig = ConnectionConfig.builder()
+    .apiKey("your-key")
+    .domain("api.opensandbox.io")
+    .connectionPool(sharedPool)
+    .build();
+```
+
+<ParamField path="apiKey" type="String" required>
+  API Key for authentication (can also be set via `OPEN_SANDBOX_API_KEY` environment variable).
+</ParamField>
+
+<ParamField path="domain" type="String" required>
+  The endpoint domain of the sandbox service (can also be set via `OPEN_SANDBOX_DOMAIN` environment variable).
+</ParamField>
+
+<ParamField path="protocol" type="String" default="http">
+  HTTP protocol (http/https).
+</ParamField>
+
+<ParamField path="requestTimeout" type="Duration" default="Duration.ofSeconds(30)">
+  Timeout for API requests.
+</ParamField>
+
+<ParamField path="debug" type="boolean" default="false">
+  Enable debug logging for HTTP requests.
+</ParamField>
+
+<ParamField path="headers" type="Map<String, String>">
+  Custom HTTP headers.
+</ParamField>
+
+<ParamField path="connectionPool" type="ConnectionPool">
+  Shared OKHttp ConnectionPool.
+</ParamField>
+
+<ParamField path="useServerProxy" type="boolean" default="false">
+  Use sandbox server as proxy for execd/endpoint requests.
+</ParamField>
+
+## Network Policy
+
+```java
+import com.alibaba.opensandbox.sandbox.domain.models.sandboxes.NetworkPolicy;
+import com.alibaba.opensandbox.sandbox.domain.models.sandboxes.NetworkRule;
+
+Sandbox sandbox = Sandbox.builder()
+    .connectionConfig(config)
+    .image("python:3.11")
+    .networkPolicy(
+        NetworkPolicy.builder()
+            .defaultAction(NetworkPolicy.DefaultAction.DENY)
+            .addEgress(
+                NetworkRule.builder()
+                    .action(NetworkRule.Action.ALLOW)
+                    .target("pypi.org")
+                    .build()
+            )
+            .build()
+    )
+    .build();
+```
+
+## Complete Example
+
+```java
+import com.alibaba.opensandbox.sandbox.Sandbox;
+import com.alibaba.opensandbox.sandbox.config.ConnectionConfig;
+import com.alibaba.opensandbox.sandbox.domain.exceptions.SandboxException;
+import com.alibaba.opensandbox.sandbox.domain.models.execd.executions.Execution;
+import com.alibaba.opensandbox.sandbox.domain.models.filesystem.WriteEntry;
+import java.time.Duration;
+import java.util.List;
+
+public class Example {
+    public static void main(String[] args) {
+        ConnectionConfig config = ConnectionConfig.builder()
+            .domain("api.opensandbox.io")
+            .apiKey("your-api-key")
+            .build();
+
+        try (Sandbox sandbox = Sandbox.builder()
+                .connectionConfig(config)
+                .image("python:3.11")
+                .timeout(Duration.ofMinutes(30))
+                .build()) {
+
+            // Write a file
+            sandbox.files().write(List.of(
+                WriteEntry.builder()
+                    .path("/tmp/script.py")
+                    .data("print('Hello World')")
+                    .mode(644)
+                    .build()
+            ));
+
+            // Execute command
+            Execution execution = sandbox.commands().run("python /tmp/script.py");
+            System.out.println(execution.getLogs().getStdout().get(0).getText());
+
+            // Get info
+            SandboxInfo info = sandbox.getInfo();
+            System.out.println("State: " + info.getStatus().getState());
+
+            // Cleanup
+            sandbox.kill();
+        } catch (SandboxException e) {
+            System.err.println("Sandbox Error: [" + e.getError().getCode() + "] " + e.getError().getMessage());
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+    }
+}
+```

@@ -1,0 +1,181 @@
+---
+title: 'Gemini CLI Integration'
+description: 'Run Google Gemini AI inside OpenSandbox using the Gemini CLI'
+icon: 'sparkles'
+---
+
+## Overview
+
+This example shows how to integrate Google's Gemini AI with OpenSandbox using the `@google/gemini-cli` npm package. Execute Gemini AI queries in a secure, isolated sandbox environment.
+
+## Prerequisites
+
+- OpenSandbox server running locally or remotely
+- Docker with the code-interpreter image
+- Google Gemini API key
+- Python with `uv` package manager
+
+## Setup
+
+### 1. Pull the Code Interpreter Image
+
+The code-interpreter image includes Node.js for running the Gemini CLI:
+
+```bash
+docker pull sandbox-registry.cn-zhangjiakou.cr.aliyuncs.com/opensandbox/code-interpreter:v1.0.1
+
+# Alternative: Docker Hub
+# docker pull opensandbox/code-interpreter:v1.0.1
+```
+
+### 2. Start OpenSandbox Server
+
+Initialize and start the server:
+
+```bash
+uv pip install opensandbox-server
+opensandbox-server init-config ~/.sandbox.toml --example docker
+opensandbox-server
+```
+
+## Implementation
+
+### Installation
+
+Install the OpenSandbox Python SDK:
+
+```bash
+uv pip install opensandbox
+```
+
+### Code Example
+
+Complete implementation for running Gemini inside a sandbox:
+
+```python
+import asyncio
+import os
+from datetime import timedelta
+from opensandbox import Sandbox
+from opensandbox.config import ConnectionConfig
+
+async def main() -> None:
+    # Configuration
+    domain = os.getenv("SANDBOX_DOMAIN", "localhost:8080")
+    api_key = os.getenv("SANDBOX_API_KEY")
+    gemini_api_key = os.getenv("GEMINI_API_KEY")
+    if not gemini_api_key:
+        raise RuntimeError("GEMINI_API_KEY is required")
+    
+    gemini_model = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+    image = os.getenv(
+        "SANDBOX_IMAGE",
+        "sandbox-registry.cn-zhangjiakou.cr.aliyuncs.com/opensandbox/code-interpreter:v1.0.1",
+    )
+
+    config = ConnectionConfig(
+        domain=domain,
+        api_key=api_key,
+        request_timeout=timedelta(seconds=60),
+    )
+
+    # Inject Gemini settings into container environment
+    env = {
+        "GEMINI_API_KEY": gemini_api_key,
+        "GEMINI_BASE_URL": os.getenv("GEMINI_BASE_URL"),
+        "GEMINI_MODEL": gemini_model,
+    }
+    # Drop None values
+    env = {k: v for k, v in env.items() if v is not None}
+
+    # Create sandbox with environment variables
+    sandbox = await Sandbox.create(
+        image,
+        connection_config=config,
+        env=env,
+    )
+
+    async with sandbox:
+        # Install Gemini CLI
+        install_exec = await sandbox.commands.run(
+            "npm install -g @google/gemini-cli@latest"
+        )
+        
+        # Print installation logs
+        for msg in install_exec.logs.stdout:
+            print(f"[stdout] {msg.text}")
+
+        # Use Gemini CLI to send a message
+        run_exec = await sandbox.commands.run(
+            'gemini "Compute 1+1=?."'
+        )
+        
+        # Print Gemini's response
+        for msg in run_exec.logs.stdout:
+            print(f"[stdout] {msg.text}")
+        if run_exec.error:
+            print(f"[error] {run_exec.error.name}: {run_exec.error.value}")
+
+        await sandbox.kill()
+
+if __name__ == "__main__":
+    asyncio.run(main())
+```
+
+## Environment Variables
+
+Configure the integration using these environment variables:
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `SANDBOX_DOMAIN` | No | `localhost:8080` | Sandbox service address |
+| `SANDBOX_API_KEY` | No | - | API key for authentication (optional for local) |
+| `SANDBOX_IMAGE` | No | `opensandbox/code-interpreter:v1.0.1` | Docker image to use |
+| `GEMINI_API_KEY` | Yes | - | Your Google Gemini API key |
+| `GEMINI_BASE_URL` | No | - | Custom API endpoint (e.g., for proxies) |
+| `GEMINI_MODEL` | No | `gemini-2.5-flash` | Model to use |
+
+## Running the Example
+
+Set your environment variables and run:
+
+```bash
+export GEMINI_API_KEY="your-api-key-here"
+uv run python examples/gemini-cli/main.py
+```
+
+## How It Works
+
+1. **Sandbox Creation**: Spins up an isolated container with Node.js
+2. **Environment Injection**: Securely passes Gemini API credentials
+3. **CLI Installation**: Installs the Gemini CLI via npm
+4. **Query Execution**: Runs Gemini commands and captures responses
+5. **Cleanup**: Terminates the sandbox after execution
+
+## Key Features
+
+- **Isolated Execution**: Gemini runs in a secure container
+- **Flexible Configuration**: Support for custom endpoints and models
+- **Real-time Logging**: Access to stdout, stderr, and error streams
+- **Async Architecture**: Built with Python asyncio for performance
+
+## Use Cases
+
+- AI-powered code assistance in isolated environments
+- Safe testing of AI-generated code
+- Automated content generation and analysis
+- Building AI workflows with Google's latest models
+
+## Model Options
+
+You can use different Gemini models by setting the `GEMINI_MODEL` environment variable:
+
+- `gemini-2.5-flash` (default) - Fast, efficient responses
+- `gemini-2.5-pro` - More capable, higher quality outputs
+- Other models as available from Google AI
+
+## References
+
+- [@google/gemini-cli npm package](https://www.npmjs.com/package/@google/gemini-cli)
+- [Google AI Studio](https://aistudio.google.com/)
+- [OpenSandbox Python SDK](/sdks/python/overview)

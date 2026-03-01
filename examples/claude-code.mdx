@@ -1,0 +1,173 @@
+---
+title: 'Claude Code Integration'
+description: 'Run Claude AI coding agent inside OpenSandbox using the claude-code CLI'
+icon: 'robot'
+---
+
+## Overview
+
+This example demonstrates how to run Claude Code, Anthropic's AI coding assistant, inside an OpenSandbox environment. The integration uses the `@anthropic-ai/claude-code` npm package to execute AI-powered coding tasks in a secure, isolated sandbox.
+
+## Prerequisites
+
+- OpenSandbox server running locally or remotely
+- Docker with the code-interpreter image
+- Anthropic API credentials
+- Python with `uv` package manager
+
+## Setup
+
+### 1. Pull the Code Interpreter Image
+
+The code-interpreter image includes Node.js, which is required for the Claude CLI:
+
+```bash
+docker pull sandbox-registry.cn-zhangjiakou.cr.aliyuncs.com/opensandbox/code-interpreter:v1.0.1
+
+# Alternative: Docker Hub
+# docker pull opensandbox/code-interpreter:v1.0.1
+```
+
+### 2. Start OpenSandbox Server
+
+Initialize and start the local server:
+
+```bash
+uv pip install opensandbox-server
+opensandbox-server init-config ~/.sandbox.toml --example docker
+opensandbox-server
+```
+
+The server will display logs in your terminal.
+
+## Implementation
+
+### Installation
+
+Install the OpenSandbox Python SDK:
+
+```bash
+uv pip install opensandbox
+```
+
+### Code Example
+
+Here's the complete implementation that creates a sandbox, installs Claude CLI, and runs a query:
+
+```python
+import asyncio
+import os
+from datetime import timedelta
+from opensandbox import Sandbox
+from opensandbox.config import ConnectionConfig
+
+async def main() -> None:
+    # Configuration
+    domain = os.getenv("SANDBOX_DOMAIN", "localhost:8080")
+    api_key = os.getenv("SANDBOX_API_KEY")
+    claude_auth_token = os.getenv("ANTHROPIC_AUTH_TOKEN")
+    claude_model_name = os.getenv("ANTHROPIC_MODEL", "claude_sonnet4")
+    image = os.getenv(
+        "SANDBOX_IMAGE",
+        "sandbox-registry.cn-zhangjiakou.cr.aliyuncs.com/opensandbox/code-interpreter:v1.0.1",
+    )
+
+    config = ConnectionConfig(
+        domain=domain,
+        api_key=api_key,
+        request_timeout=timedelta(seconds=60),
+    )
+
+    # Inject Claude settings into container environment
+    env = {
+        "ANTHROPIC_AUTH_TOKEN": claude_auth_token,
+        "ANTHROPIC_BASE_URL": os.getenv("ANTHROPIC_BASE_URL"),
+        "ANTHROPIC_MODEL": claude_model_name,
+        "IS_SANDBOX": "1",
+    }
+    # Drop None values
+    env = {k: v for k, v in env.items() if v is not None}
+
+    # Create sandbox with environment variables
+    sandbox = await Sandbox.create(
+        image,
+        connection_config=config,
+        env=env,
+    )
+
+    async with sandbox:
+        # Install Claude CLI
+        install_exec = await sandbox.commands.run(
+            "npm i -g @anthropic-ai/claude-code@latest"
+        )
+        
+        # Print installation logs
+        for msg in install_exec.logs.stdout:
+            print(f"[stdout] {msg.text}")
+
+        # Use Claude CLI to send a message
+        run_exec = await sandbox.commands.run(
+            'claude "Compute 1+1=?."'
+        )
+        
+        # Print Claude's response
+        for msg in run_exec.logs.stdout:
+            print(f"[stdout] {msg.text}")
+        if run_exec.error:
+            print(f"[error] {run_exec.error.name}: {run_exec.error.value}")
+
+        await sandbox.kill()
+
+if __name__ == "__main__":
+    asyncio.run(main())
+```
+
+## Environment Variables
+
+Configure the integration using these environment variables:
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `SANDBOX_DOMAIN` | No | `localhost:8080` | Sandbox service address |
+| `SANDBOX_API_KEY` | No | - | API key for authentication (optional for local) |
+| `SANDBOX_IMAGE` | No | `opensandbox/code-interpreter:v1.0.1` | Docker image to use |
+| `ANTHROPIC_AUTH_TOKEN` | Yes | - | Your Anthropic authentication token |
+| `ANTHROPIC_BASE_URL` | No | - | Custom API endpoint (e.g., for proxies) |
+| `ANTHROPIC_MODEL` | No | `claude_sonnet4` | Model name to use |
+
+## Running the Example
+
+Set your environment variables and run:
+
+```bash
+export ANTHROPIC_AUTH_TOKEN="your-token-here"
+uv run python examples/claude-code/main.py
+```
+
+## How It Works
+
+1. **Sandbox Creation**: Creates an isolated container with Node.js pre-installed
+2. **Environment Injection**: Passes Anthropic credentials securely via environment variables
+3. **CLI Installation**: Installs the Claude Code CLI using npm inside the sandbox
+4. **Command Execution**: Runs Claude commands and captures output
+5. **Cleanup**: Properly terminates the sandbox instance
+
+## Key Features
+
+- **Secure Isolation**: Claude runs in a containerized environment
+- **Environment Control**: Full control over API endpoints and models
+- **Log Streaming**: Real-time access to stdout, stderr, and error logs
+- **Async Support**: Built with Python's asyncio for efficient operations
+
+## Use Cases
+
+- AI-powered code generation in isolated environments
+- Automated code analysis and refactoring
+- Safe execution of AI-suggested code changes
+- Testing AI coding assistants in controlled environments
+
+## References
+
+- [claude-code npm package](https://www.npmjs.com/package/@anthropic-ai/claude-code)
+- [Anthropic API Documentation](https://docs.anthropic.com/)
+- [OpenSandbox Python SDK](/sdks/python/overview)

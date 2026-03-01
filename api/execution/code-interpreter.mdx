@@ -1,0 +1,470 @@
+---
+title: "Code Interpreter"
+description: "Execute code in Python, JavaScript, and other languages with stateful contexts"
+---
+
+The Code Interpreter API enables execution of code in multiple programming languages using Jupyter kernels. It supports stateful execution contexts, allowing variables and state to persist across multiple code executions within the same session.
+
+## Create Code Context
+
+<Note>
+Creating a context is optional. If you don't provide a context when executing code, the system will use stateless execution.
+</Note>
+
+<RequestExample>
+```bash cURL
+curl -X POST http://localhost:44772/code/context \
+  -H "X-EXECD-ACCESS-TOKEN: your-token" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "language": "python"
+  }'
+```
+
+```python Python
+import requests
+
+response = requests.post(
+    "http://localhost:44772/code/context",
+    headers={
+        "X-EXECD-ACCESS-TOKEN": "your-token",
+        "Content-Type": "application/json"
+    },
+    json={"language": "python"}
+)
+
+context = response.json()
+print(f"Context ID: {context['id']}")
+```
+</RequestExample>
+
+Creates a new code execution environment and returns a session ID for subsequent code executions. The context maintains state across multiple code runs within the same session.
+
+<ParamField body="language" type="string" required>
+  Execution runtime (python, bash, java, etc.)
+</ParamField>
+
+<ResponseField name="id" type="string">
+  Unique session identifier for the created context
+</ResponseField>
+
+<ResponseField name="language" type="string">
+  Execution runtime
+</ResponseField>
+
+<ResponseExample>
+```json 200
+{
+  "id": "session-abc123",
+  "language": "python"
+}
+```
+
+```json 400
+{
+  "code": "INVALID_REQUEST_BODY",
+  "message": "error parsing request, MAYBE invalid body format"
+}
+```
+</ResponseExample>
+
+---
+
+## Execute Code
+
+<RequestExample>
+```bash cURL
+curl -X POST http://localhost:44772/code \
+  -H "X-EXECD-ACCESS-TOKEN: your-token" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "context": {
+      "id": "session-123",
+      "language": "python"
+    },
+    "code": "print(\"Hello, World!\")\nresult = 2 + 2\nresult"
+  }'
+```
+
+```python Python
+import requests
+import json
+
+url = "http://localhost:44772/code"
+headers = {
+    "X-EXECD-ACCESS-TOKEN": "your-token",
+    "Content-Type": "application/json"
+}
+data = {
+    "context": {
+        "id": "session-123",
+        "language": "python"
+    },
+    "code": "print('Hello, World!')\nresult = 2 + 2\nresult"
+}
+
+response = requests.post(url, headers=headers, json=data, stream=True)
+
+for line in response.iter_lines():
+    if line:
+        decoded = line.decode('utf-8')
+        if decoded.startswith('data: '):
+            event_data = json.loads(decoded[6:])
+            print(f"Event: {event_data['type']}")
+            if event_data.get('text'):
+                print(f"Output: {event_data['text']}")
+```
+</RequestExample>
+
+Executes code using Jupyter kernel in a specified execution context and streams the output in real-time using SSE (Server-Sent Events). Supports multiple programming languages and maintains execution state within the session.
+
+<ParamField body="code" type="string" required>
+  Source code to execute
+</ParamField>
+
+<ParamField body="context" type="object">
+  Execution context (optional for stateless execution)
+  
+  <Expandable title="Context properties">
+    <ParamField body="id" type="string">
+      Session identifier from CreateContext
+    </ParamField>
+    
+    <ParamField body="language" type="string" required>
+      Execution runtime (python, bash, java, etc.)
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+<ResponseField name="type" type="string">
+  Event type: `init`, `status`, `stdout`, `stderr`, `result`, `execution_complete`, `execution_count`, `error`, `ping`
+</ResponseField>
+
+<ResponseField name="text" type="string">
+  Textual data for status, init, and stream events
+</ResponseField>
+
+<ResponseField name="execution_count" type="integer">
+  Cell execution number in the session (Jupyter-style)
+</ResponseField>
+
+<ResponseField name="execution_time" type="integer">
+  Execution duration in milliseconds
+</ResponseField>
+
+<ResponseField name="timestamp" type="integer">
+  When the event was generated (Unix milliseconds)
+</ResponseField>
+
+<ResponseField name="results" type="object">
+  Execution output in various MIME types (e.g., "text/plain", "text/html", "image/png")
+</ResponseField>
+
+<ResponseField name="error" type="object">
+  Execution error details if an error occurred
+  
+  <Expandable title="Error properties">
+    <ResponseField name="ename" type="string">
+      Error name/type (e.g., "NameError", "SyntaxError")
+    </ResponseField>
+    
+    <ResponseField name="evalue" type="string">
+      Error value/message
+    </ResponseField>
+    
+    <ResponseField name="traceback" type="array">
+      Stack trace lines
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+<ResponseExample>
+```text SSE Stream
+data: {"type":"init","text":"Initializing execution","timestamp":1700000000000}
+
+data: {"type":"stdout","text":"Hello, World!\n","timestamp":1700000000100}
+
+data: {"type":"result","results":{"text/plain":"4"},"timestamp":1700000000200}
+
+data: {"type":"execution_complete","execution_time":150,"execution_count":1,"timestamp":1700000000250}
+
+```
+
+```text Error Example
+data: {"type":"error","error":{"ename":"NameError","evalue":"name 'undefined_var' is not defined","traceback":["Traceback (most recent call last):","  File \"<stdin>\", line 1, in <module>","NameError: name 'undefined_var' is not defined"]},"timestamp":1700000000300}
+
+```
+</ResponseExample>
+
+---
+
+## List Code Contexts
+
+<RequestExample>
+```bash cURL
+curl -X GET "http://localhost:44772/code/contexts?language=python" \
+  -H "X-EXECD-ACCESS-TOKEN: your-token"
+```
+
+```python Python
+import requests
+
+response = requests.get(
+    "http://localhost:44772/code/contexts",
+    headers={"X-EXECD-ACCESS-TOKEN": "your-token"},
+    params={"language": "python"}
+)
+
+contexts = response.json()
+for ctx in contexts:
+    print(f"Context: {ctx['id']} ({ctx['language']})")
+```
+</RequestExample>
+
+Lists all active/available code execution contexts. If `language` is provided, only contexts under that language/runtime are returned.
+
+<ParamField query="language" type="string" required>
+  Filter contexts by execution runtime (python, bash, java, etc.)
+</ParamField>
+
+<ResponseField name="contexts" type="array">
+  Array of active contexts
+  
+  <Expandable title="Context properties">
+    <ResponseField name="id" type="string">
+      Session identifier
+    </ResponseField>
+    
+    <ResponseField name="language" type="string">
+      Execution runtime
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+<ResponseExample>
+```json 200
+[
+  {
+    "id": "session-abc123",
+    "language": "python"
+  },
+  {
+    "id": "session-def456",
+    "language": "python"
+  }
+]
+```
+</ResponseExample>
+
+---
+
+## Get Code Context
+
+<RequestExample>
+```bash cURL
+curl -X GET http://localhost:44772/code/contexts/session-abc123 \
+  -H "X-EXECD-ACCESS-TOKEN: your-token"
+```
+
+```python Python
+import requests
+
+context_id = "session-abc123"
+response = requests.get(
+    f"http://localhost:44772/code/contexts/{context_id}",
+    headers={"X-EXECD-ACCESS-TOKEN": "your-token"}
+)
+
+context = response.json()
+print(f"Context: {context['id']} ({context['language']})")
+```
+</RequestExample>
+
+Retrieves the details of an existing code execution context (session) by ID. Returns the context ID, language, and any associated metadata.
+
+<ParamField path="context_id" type="string" required>
+  Session/context ID to retrieve
+</ParamField>
+
+<ResponseField name="id" type="string">
+  Unique session identifier
+</ResponseField>
+
+<ResponseField name="language" type="string">
+  Execution runtime
+</ResponseField>
+
+<ResponseExample>
+```json 200
+{
+  "id": "session-abc123",
+  "language": "python"
+}
+```
+
+```json 404
+{
+  "code": "CONTEXT_NOT_FOUND",
+  "message": "context not found"
+}
+```
+</ResponseExample>
+
+---
+
+## Delete Code Context
+
+<RequestExample>
+```bash cURL
+curl -X DELETE http://localhost:44772/code/contexts/session-abc123 \
+  -H "X-EXECD-ACCESS-TOKEN: your-token"
+```
+
+```python Python
+import requests
+
+context_id = "session-abc123"
+response = requests.delete(
+    f"http://localhost:44772/code/contexts/{context_id}",
+    headers={"X-EXECD-ACCESS-TOKEN": "your-token"}
+)
+
+if response.status_code == 200:
+    print("Context deleted successfully")
+```
+</RequestExample>
+
+Deletes an existing code execution context (session) by ID. This terminates the underlying context thread/process and releases resources.
+
+<ParamField path="context_id" type="string" required>
+  Session/context ID to delete
+</ParamField>
+
+<ResponseExample>
+```json 200
+{}
+```
+
+```json 404
+{
+  "code": "CONTEXT_NOT_FOUND",
+  "message": "context not found"
+}
+```
+</ResponseExample>
+
+---
+
+## Delete All Contexts by Language
+
+<RequestExample>
+```bash cURL
+curl -X DELETE "http://localhost:44772/code/contexts?language=python" \
+  -H "X-EXECD-ACCESS-TOKEN: your-token"
+```
+
+```python Python
+import requests
+
+response = requests.delete(
+    "http://localhost:44772/code/contexts",
+    headers={"X-EXECD-ACCESS-TOKEN": "your-token"},
+    params={"language": "python"}
+)
+
+if response.status_code == 200:
+    print("All Python contexts deleted")
+```
+</RequestExample>
+
+Deletes all existing code execution contexts under the specified `language`/runtime. This is a bulk operation intended for code-interpreter context cleanup.
+
+<ParamField query="language" type="string" required>
+  Target execution runtime whose contexts should be deleted
+</ParamField>
+
+<ResponseExample>
+```json 200
+{}
+```
+</ResponseExample>
+
+---
+
+## Interrupt Code Execution
+
+<RequestExample>
+```bash cURL
+curl -X DELETE "http://localhost:44772/code?id=session-123" \
+  -H "X-EXECD-ACCESS-TOKEN: your-token"
+```
+
+```python Python
+import requests
+
+response = requests.delete(
+    "http://localhost:44772/code",
+    headers={"X-EXECD-ACCESS-TOKEN": "your-token"},
+    params={"id": "session-123"}
+)
+
+if response.status_code == 200:
+    print("Execution interrupted")
+```
+</RequestExample>
+
+Interrupts the currently running code execution in the specified context. This sends a signal to terminate the execution process and releases associated resources.
+
+<ParamField query="id" type="string" required>
+  Session ID of the execution context to interrupt
+</ParamField>
+
+<ResponseExample>
+```json 200
+{}
+```
+</ResponseExample>
+
+## Stateful vs Stateless Execution
+
+### Stateful Execution
+
+When you provide a context with an ID, variables and state persist across executions:
+
+```python
+# First execution
+{
+  "context": {"id": "session-123", "language": "python"},
+  "code": "x = 10"
+}
+
+# Second execution - x is still available
+{
+  "context": {"id": "session-123", "language": "python"},
+  "code": "print(x + 5)"  # Output: 15
+}
+```
+
+### Stateless Execution
+
+When you omit the context or don't provide an ID, each execution is independent:
+
+```python
+# Stateless execution
+{
+  "code": "echo 'Hello from shell'"
+}
+```
+
+## Supported Languages
+
+The Code Interpreter supports any language with a Jupyter kernel installed:
+
+- **Python** - IPython kernel
+- **JavaScript** - Node.js kernel
+- **Bash** - Bash kernel
+- **Java** - IJava kernel
+- **R** - IRkernel
+- And many more...
+
+The available languages depend on the kernels installed in your sandbox environment.

@@ -1,0 +1,593 @@
+---
+title: Remote Development Environments
+description: Provision on-demand cloud development environments with VS Code and full tooling support
+---
+
+OpenSandbox enables instant remote development environments with VS Code (code-server), pre-configured toolchains, and isolated workspaces accessible from any browser.
+
+## Overview
+
+Remote development environments in OpenSandbox provide:
+
+- **Browser-based VS Code** via code-server
+- **Pre-configured toolchains** (Python, Node.js, Go, Java, etc.)
+- **Isolated workspaces** for each developer or project
+- **Instant provisioning** - seconds to start a new environment
+- **Resource control** - CPU, memory, and storage limits per environment
+- **Persistent or ephemeral** - choose based on your workflow
+
+## Architecture
+
+```
+┌─────────────────────────────────────┐
+│   Developer's Browser               │
+│   ┌─────────────────────────────┐   │
+│   │  VS Code Web Interface      │   │
+│   │  (code-server)              │   │
+│   └─────────────────────────────┘   │
+└──────────────┬──────────────────────┘
+               │ HTTPS
+               ▼
+┌─────────────────────────────────────┐
+│   OpenSandbox Server                │
+│   ┌─────────────────────────────┐   │
+│   │  API Gateway & Auth         │   │
+│   └─────────────────────────────┘   │
+└──────────────┬──────────────────────┘
+               │
+               ▼
+┌─────────────────────────────────────┐
+│   VS Code Sandbox Container         │
+│                                     │
+│   ┌─────────────────────────────┐   │
+│   │  code-server :8443          │   │
+│   │  - VS Code extensions       │   │
+│   │  - Terminal access          │   │
+│   │  - File explorer            │   │
+│   └─────────────────────────────┘   │
+│                                     │
+│   ┌─────────────────────────────┐   │
+│   │  Development Tools          │   │
+│   │  - Python 3.11              │   │
+│   │  - Node.js                  │   │
+│   │  - Git                      │   │
+│   │  - Package managers         │   │
+│   └─────────────────────────────┘   │
+│                                     │
+│   ┌─────────────────────────────┐   │
+│   │  Workspace /workspace       │   │
+│   │  - User files               │   │
+│   │  - Project code             │   │
+│   └─────────────────────────────┘   │
+└─────────────────────────────────────┘
+```
+
+## Quick Start
+
+### 1. Build or Pull VS Code Image
+
+```bash
+# Pull pre-built image
+docker pull opensandbox/vscode:latest
+
+# Or build from source
+cd examples/vscode
+docker build -t opensandbox/vscode:latest .
+```
+
+### 2. Start OpenSandbox Server
+
+```bash
+uv pip install opensandbox-server
+opensandbox-server init-config ~/.sandbox.toml --example docker
+opensandbox-server
+```
+
+### 3. Create a Development Environment
+
+```python
+import asyncio
+from datetime import timedelta
+from opensandbox import Sandbox
+from opensandbox.config import ConnectionConfig
+from opensandbox.models.execd import RunCommandOpts
+
+async def create_dev_environment():
+    sandbox = await Sandbox.create(
+        image="opensandbox/vscode:latest",
+        connection_config=ConnectionConfig(domain="localhost:8080"),
+        env={"PYTHON_VERSION": "3.11"},
+    )
+    
+    async with sandbox:
+        # Start code-server
+        await sandbox.commands.run(
+            "code-server --bind-addr 0.0.0.0:8443 --auth none /workspace",
+            opts=RunCommandOpts(background=True)
+        )
+        
+        # Get access URL
+        endpoint = await sandbox.get_endpoint(8443)
+        print(f"VS Code available at: http://{endpoint.endpoint}/")
+        
+        # Keep sandbox alive
+        await asyncio.sleep(600)  # 10 minutes
+        await sandbox.kill()
+
+asyncio.run(create_dev_environment())
+```
+
+View the complete example: [`examples/vscode/`](https://github.com/opensandbox-io/opensandbox/tree/main/examples/vscode)
+
+## Features
+
+### VS Code Web (code-server)
+
+Full VS Code experience in the browser:
+
+- **Extensions marketplace** - Install VS Code extensions
+- **Integrated terminal** - Full shell access
+- **File explorer** - Browse and edit files
+- **Git integration** - Commit, push, pull directly from the UI
+- **Debugging** - Full debugger support
+- **IntelliSense** - Code completion and suggestions
+
+### Pre-configured Toolchains
+
+The VS Code image includes:
+
+```dockerfile
+# Python development
+RUN apt-get install -y python3 python3-pip python3-venv
+
+# Node.js development
+RUN curl -fsSL https://deb.nodesource.com/setup_lts.x | bash -
+RUN apt-get install -y nodejs
+
+# Git and version control
+RUN apt-get install -y git git-lfs
+
+# Build tools
+RUN apt-get install -y build-essential cmake
+```
+
+### Workspace Persistence
+
+Choose between ephemeral and persistent workspaces:
+
+#### Ephemeral (Default)
+
+```python
+# Workspace is lost when sandbox terminates
+sandbox = await Sandbox.create("opensandbox/vscode:latest")
+```
+
+#### Persistent with Volume Mounts
+
+```python
+from opensandbox.models import VolumeMount
+
+sandbox = await Sandbox.create(
+    "opensandbox/vscode:latest",
+    volume_mounts=[
+        VolumeMount(
+            name="workspace",
+            mount_path="/workspace",
+            pvc_name="user-workspace-pvc"
+        )
+    ]
+)
+```
+
+See: [`examples/docker-pvc-volume-mount/`](https://github.com/opensandbox-io/opensandbox/tree/main/examples/docker-pvc-volume-mount)
+
+### Multi-Language Support
+
+Configure Python version at runtime:
+
+```python
+sandbox = await Sandbox.create(
+    "opensandbox/vscode:latest",
+    env={"PYTHON_VERSION": "3.11"}  # or "3.12", "3.10", etc.
+)
+```
+
+Install additional languages on-demand:
+
+```python
+# Install Go
+await sandbox.commands.run(
+    "apt-get update && apt-get install -y golang-go"
+)
+
+# Install Rust
+await sandbox.commands.run(
+    "curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y"
+)
+
+# Install Java
+await sandbox.commands.run(
+    "apt-get install -y openjdk-17-jdk maven"
+)
+```
+
+## Use Cases
+
+### Onboarding New Developers
+
+Provide instant, pre-configured development environments:
+
+```python
+async def onboard_developer(user: str, repo_url: str):
+    sandbox = await Sandbox.create(
+        "opensandbox/vscode:latest",
+        metadata={"user": user}
+    )
+    
+    # Clone repository
+    await sandbox.commands.run(f"git clone {repo_url} /workspace/project")
+    
+    # Install dependencies
+    await sandbox.commands.run(
+        "cd /workspace/project && pip install -r requirements.txt",
+    )
+    
+    # Start code-server
+    await sandbox.commands.run(
+        "code-server --bind-addr 0.0.0.0:8443 --auth none /workspace/project",
+        opts=RunCommandOpts(background=True)
+    )
+    
+    endpoint = await sandbox.get_endpoint(8443)
+    return f"http://{endpoint.endpoint}/"
+```
+
+### Coding Interviews
+
+Create isolated environments for technical assessments:
+
+```python
+async def create_interview_environment(candidate: str, problem: str):
+    sandbox = await Sandbox.create(
+        "opensandbox/vscode:latest",
+        timeout=timedelta(hours=2),  # Interview duration
+        metadata={"candidate": candidate, "type": "interview"}
+    )
+    
+    # Prepare problem files
+    await sandbox.files.write_file("/workspace/README.md", problem)
+    await sandbox.files.write_file("/workspace/solution.py", "# Your solution here")
+    await sandbox.files.write_file("/workspace/test_solution.py", test_code)
+    
+    # Start code-server
+    await sandbox.commands.run(
+        "code-server --bind-addr 0.0.0.0:8443 --auth none /workspace",
+        opts=RunCommandOpts(background=True)
+    )
+    
+    endpoint = await sandbox.get_endpoint(8443)
+    return endpoint.endpoint
+```
+
+### Educational Platforms
+
+Provide students with hands-on coding environments:
+
+```python
+async def create_classroom_environment(student_id: str, lesson: str):
+    sandbox = await Sandbox.create(
+        "opensandbox/vscode:latest",
+        memory_limit="512Mi",  # Limit resources per student
+        cpu_limit="0.5"
+    )
+    
+    # Load lesson materials
+    lesson_files = load_lesson(lesson)
+    for filename, content in lesson_files.items():
+        await sandbox.files.write_file(f"/workspace/{filename}", content)
+    
+    # Start code-server
+    await sandbox.commands.run(
+        "code-server --bind-addr 0.0.0.0:8443 --auth none /workspace",
+        opts=RunCommandOpts(background=True)
+    )
+    
+    endpoint = await sandbox.get_endpoint(8443)
+    return endpoint.endpoint
+```
+
+### CI/CD Pipeline Testing
+
+Test build scripts and deployment configurations:
+
+```python
+async def test_ci_pipeline(repo_url: str, branch: str):
+    sandbox = await Sandbox.create("opensandbox/vscode:latest")
+    
+    # Clone and checkout branch
+    await sandbox.commands.run(f"git clone {repo_url} /workspace/repo")
+    await sandbox.commands.run(f"cd /workspace/repo && git checkout {branch}")
+    
+    # Run CI script
+    result = await sandbox.commands.run(
+        "cd /workspace/repo && ./ci/build.sh"
+    )
+    
+    if result.error:
+        print(f"CI failed: {result.error.value}")
+    else:
+        print("CI passed!")
+    
+    await sandbox.kill()
+```
+
+### Development Sandboxes for AI Agents
+
+Provide AI coding agents with full IDE access:
+
+```python
+async def agent_coding_environment(task: str):
+    sandbox = await Sandbox.create("opensandbox/vscode:latest")
+    
+    # Agent can use code-server UI or SDK for file operations
+    await sandbox.files.write_file("/workspace/task.md", task)
+    
+    # Start code-server for monitoring
+    await sandbox.commands.run(
+        "code-server --bind-addr 0.0.0.0:8443 --auth none /workspace",
+        opts=RunCommandOpts(background=True)
+    )
+    
+    # Agent performs coding task via SDK
+    await sandbox.files.write_file("/workspace/solution.py", generated_code)
+    
+    # Run tests
+    result = await sandbox.commands.run("python -m pytest /workspace/tests/")
+    
+    return result
+```
+
+## Configuration
+
+### Environment Variables
+
+```python
+sandbox = await Sandbox.create(
+    "opensandbox/vscode:latest",
+    env={
+        "PYTHON_VERSION": "3.11",
+        "CODE_PORT": "8443",
+        "GIT_USER_NAME": "John Doe",
+        "GIT_USER_EMAIL": "john@example.com"
+    }
+)
+```
+
+### Authentication
+
+Enable code-server authentication:
+
+```python
+# Generate password
+import secrets
+password = secrets.token_urlsafe(16)
+
+# Start with auth
+await sandbox.commands.run(
+    f"code-server --bind-addr 0.0.0.0:8443 --auth password /workspace",
+    opts=RunCommandOpts(background=True),
+    env={"PASSWORD": password}
+)
+
+print(f"Login with password: {password}")
+```
+
+### VS Code Extensions
+
+Install extensions programmatically:
+
+```python
+# Install Python extension
+await sandbox.commands.run(
+    "code-server --install-extension ms-python.python"
+)
+
+# Install multiple extensions
+extensions = [
+    "ms-python.python",
+    "ms-python.vscode-pylance",
+    "esbenp.prettier-vscode",
+    "dbaeumer.vscode-eslint"
+]
+
+for ext in extensions:
+    await sandbox.commands.run(f"code-server --install-extension {ext}")
+```
+
+### Custom Dockerfile
+
+Extend the base image with your tools:
+
+```dockerfile
+FROM opensandbox/vscode:latest
+
+# Install additional tools
+RUN apt-get update && apt-get install -y \
+    postgresql-client \
+    redis-tools \
+    docker.io \
+    kubectl
+
+# Pre-install VS Code extensions
+RUN code-server --install-extension ms-python.python && \
+    code-server --install-extension golang.go && \
+    code-server --install-extension rust-lang.rust-analyzer
+
+# Add custom scripts
+COPY scripts/ /opt/scripts/
+RUN chmod +x /opt/scripts/*
+
+# Set custom workspace template
+COPY workspace-template/ /workspace/
+```
+
+## Security Best Practices
+
+### Network Isolation
+
+Restrict network access:
+
+```python
+sandbox = await Sandbox.create(
+    "opensandbox/vscode:latest",
+    network_mode="none"  # No external network
+)
+```
+
+### Resource Quotas
+
+Prevent resource abuse:
+
+```python
+sandbox = await Sandbox.create(
+    "opensandbox/vscode:latest",
+    memory_limit="2Gi",
+    cpu_limit="2",
+    timeout=timedelta(hours=8),
+    storage_limit="10Gi"
+)
+```
+
+### User Isolation
+
+Run as non-root user (default in opensandbox/vscode):
+
+```dockerfile
+# In Dockerfile
+RUN useradd -m -s /bin/bash vscode
+USER vscode
+WORKDIR /workspace
+```
+
+### Audit Logging
+
+Track sandbox usage:
+
+```python
+sandbox = await Sandbox.create(
+    "opensandbox/vscode:latest",
+    metadata={
+        "user": "john@example.com",
+        "project": "web-app",
+        "created_at": datetime.now().isoformat()
+    }
+)
+```
+
+## Performance Optimization
+
+### Image Caching
+
+Pre-pull images on nodes:
+
+```bash
+docker pull opensandbox/vscode:latest
+```
+
+### Persistent Volumes
+
+Reuse workspaces to avoid re-cloning:
+
+```python
+# First session
+sandbox1 = await Sandbox.create(
+    "opensandbox/vscode:latest",
+    volume_mounts=[VolumeMount(name="workspace", mount_path="/workspace")]
+)
+await sandbox1.commands.run("git clone https://github.com/user/repo /workspace/repo")
+await sandbox1.kill()
+
+# Later session - repo already cloned
+sandbox2 = await Sandbox.create(
+    "opensandbox/vscode:latest",
+    volume_mounts=[VolumeMount(name="workspace", mount_path="/workspace")]
+)
+# /workspace/repo still exists
+```
+
+### Background Services
+
+Use background processes for long-running services:
+
+```python
+# Start code-server in background
+await sandbox.commands.run(
+    "code-server --bind-addr 0.0.0.0:8443 --auth none /workspace",
+    opts=RunCommandOpts(background=True)
+)
+
+# Start language servers, file watchers, etc.
+await sandbox.commands.run(
+    "npm run watch",
+    opts=RunCommandOpts(background=True)
+)
+```
+
+## Troubleshooting
+
+### code-server Won't Start
+
+Check logs:
+
+```python
+result = await sandbox.commands.run("ps aux | grep code-server")
+for line in result.logs.stdout:
+    print(line.text)
+```
+
+### Port Already in Use
+
+Use dynamic ports:
+
+```python
+import random
+port = random.randint(8000, 9000)
+
+await sandbox.commands.run(
+    f"code-server --bind-addr 0.0.0.0:{port} --auth none /workspace",
+    opts=RunCommandOpts(background=True)
+)
+
+endpoint = await sandbox.get_endpoint(port)
+```
+
+### Extension Installation Failed
+
+Check network connectivity and try manual installation:
+
+```python
+# Download extension manually
+await sandbox.commands.run(
+    "wget https://example.com/extension.vsix -O /tmp/extension.vsix"
+)
+await sandbox.commands.run(
+    "code-server --install-extension /tmp/extension.vsix"
+)
+```
+
+## Related Resources
+
+<CardGroup cols={2}>
+  <Card title="VS Code Example" icon="code" href="https://github.com/opensandbox-io/opensandbox/tree/main/examples/vscode">
+    Complete VS Code sandbox example
+  </Card>
+  <Card title="Volume Mounts" icon="hard-drive" href="https://github.com/opensandbox-io/opensandbox/tree/main/examples/docker-pvc-volume-mount">
+    Persistent workspace example
+  </Card>
+  <Card title="AI Coding Agents" icon="robot" href="/use-cases/coding-agents">
+    AI agents with development environments
+  </Card>
+  <Card title="Python SDK" icon="python" href="/sdks/python">
+    SDK reference documentation
+  </Card>
+</CardGroup>

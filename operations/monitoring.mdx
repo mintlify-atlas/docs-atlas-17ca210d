@@ -1,0 +1,366 @@
+---
+title: Monitoring Sandboxes
+description: Monitor sandbox health, metrics, and system resource usage
+---
+
+OpenSandbox provides comprehensive monitoring capabilities for tracking sandbox health, resource usage, and system metrics across both server and container environments.
+
+## Health Checks
+
+### Server Health Endpoint
+
+The OpenSandbox server exposes a health check endpoint for monitoring service availability:
+
+```bash
+curl http://localhost:8080/health
+```
+
+**Expected Response:**
+```json
+{
+  "status": "healthy"
+}
+```
+
+This endpoint is used by:
+- Load balancers for health checks
+- Monitoring systems for uptime tracking
+- Kubernetes liveness/readiness probes
+- Orchestration platforms
+
+### Execd Health Check
+
+Each sandbox container runs an execd daemon that exposes its own health endpoint on port 44772:
+
+```bash
+curl http://localhost:44772/ping
+```
+
+**Response:** HTTP 200 OK if the execd daemon is running properly.
+
+## System Metrics
+
+### Metrics Endpoint
+
+The execd API provides real-time system resource metrics for individual sandboxes:
+
+```bash
+curl -H "X-EXECD-ACCESS-TOKEN: your-token" \
+  http://localhost:44772/metrics
+```
+
+**Response:**
+```json
+{
+  "cpu_count": 4.0,
+  "cpu_used_pct": 45.5,
+  "mem_total_mib": 8192.0,
+  "mem_used_mib": 4096.0,
+  "timestamp": 1700000000000
+}
+```
+
+### Metrics Fields
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `cpu_count` | float | Number of CPU cores available |
+| `cpu_used_pct` | float | CPU usage percentage (0-100) |
+| `mem_total_mib` | float | Total memory in MiB |
+| `mem_used_mib` | float | Used memory in MiB |
+| `timestamp` | int64 | Unix timestamp in milliseconds |
+
+### Real-time Metrics Streaming
+
+For continuous monitoring, use the Server-Sent Events (SSE) endpoint:
+
+```bash
+curl -H "X-EXECD-ACCESS-TOKEN: your-token" \
+  http://localhost:44772/metrics/watch
+```
+
+This streams metrics updates every second:
+
+```
+data: {"cpu_count":4.0,"cpu_used_pct":23.4,"mem_total_mib":8192.0,"mem_used_mib":3072.0,"timestamp":1700000001000}
+
+data: {"cpu_count":4.0,"cpu_used_pct":25.1,"mem_total_mib":8192.0,"mem_used_mib":3150.0,"timestamp":1700000002000}
+```
+
+## Sandbox Status Monitoring
+
+### Get Sandbox Details
+
+Retrieve the current status of a sandbox:
+
+```bash
+curl -H "OPEN-SANDBOX-API-KEY: your-secret-api-key" \
+  http://localhost:8080/v1/sandboxes/{sandbox_id}
+```
+
+**Response:**
+```json
+{
+  "id": "a1b2c3d4-5678-90ab-cdef-1234567890ab",
+  "status": {
+    "state": "Running",
+    "reason": "CONTAINER_RUNNING",
+    "message": "Sandbox is running normally",
+    "lastTransitionAt": "2024-01-15T10:30:00Z"
+  },
+  "metadata": {
+    "team": "backend",
+    "project": "api-testing"
+  },
+  "expiresAt": "2024-01-15T11:30:00Z",
+  "createdAt": "2024-01-15T10:30:00Z"
+}
+```
+
+### Sandbox Lifecycle States
+
+```
+     create()
+        │
+        ▼
+   ┌─────────┐
+   │ Pending │────────────────────┐
+   └────┬────┘                    │
+        │                         │
+        │ (provisioning)          │
+        ▼                         │
+   ┌─────────┐    pause()         │
+   │ Running │───────────────┐    │
+   └────┬────┘               │    │
+        │      resume()      │    │
+        │   ┌────────────────┘    │
+        │   │                     │
+        │   ▼                     │
+        │ ┌────────┐              │
+        ├─│ Paused │              │
+        │ └────────┘              │
+        │                         │
+        │ delete() or expire()    │
+        ▼                         │
+   ┌──────────┐                   │
+   │ Stopping │                   │
+   └────┬─────┘                   │
+        │                         │
+        ├────────────────┬────────┘
+        │                │
+        ▼                ▼
+   ┌────────────┐   ┌────────┐
+   │ Terminated │   │ Failed │
+   └────────────┘   └────────┘
+```
+
+## Kubernetes Monitoring
+
+### BatchSandbox Status
+
+For Kubernetes deployments, monitor BatchSandbox resources:
+
+```bash
+kubectl get batchsandbox -o wide
+```
+
+**Example Output:**
+```
+NAME                 DESIRED  TOTAL  ALLOCATED  READY  EXPIRE  AGE
+my-batch-sandbox     5        5      5          5      <none>  10m
+```
+
+**Status Fields:**
+- **DESIRED**: Number of sandboxes requested
+- **TOTAL**: Total sandboxes created
+- **ALLOCATED**: Sandboxes successfully allocated
+- **READY**: Sandboxes ready for use
+- **EXPIRE**: Expiration time
+
+### Pool Status
+
+Monitor resource pool availability:
+
+```bash
+kubectl get pools
+```
+
+```bash
+kubectl describe pool example-pool
+```
+
+### Task Status
+
+For BatchSandbox with tasks:
+
+```bash
+kubectl get batchsandbox task-batch-sandbox -o wide
+```
+
+**Output:**
+```
+NAME                DESIRED  TOTAL  ALLOCATED  READY  TASK_RUNNING  TASK_SUCCEED  TASK_FAILED  TASK_UNKNOWN
+task-batch-sandbox  2        2      2          2      0             2             0            0
+```
+
+## Logging Configuration
+
+### Server Log Levels
+
+Configure logging in `~/.sandbox.toml`:
+
+```toml
+[server]
+log_level = "DEBUG"  # Options: DEBUG, INFO, WARNING, ERROR
+```
+
+### Kubernetes Controller Logging
+
+#### Console Output (Default)
+
+```bash
+./controller
+```
+
+#### File Logging with Rotation
+
+```bash
+./controller \
+  --enable-file-log=true \
+  --log-file-path=/var/log/sandbox-controller/controller.log \
+  --log-max-size=100 \
+  --log-max-backups=10 \
+  --log-max-age=30 \
+  --log-compress=true
+```
+
+**Parameters:**
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `--enable-file-log` | false | Enable file logging |
+| `--log-file-path` | `/var/log/sandbox-controller/controller.log` | Log file path |
+| `--log-max-size` | 100 | Max file size in MB before rotation |
+| `--log-max-backups` | 10 | Max number of old log files |
+| `--log-max-age` | 30 | Max days to retain old logs |
+| `--log-compress` | true | Compress rotated logs (gzip) |
+
+#### Production Configuration
+
+```yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sandbox-controller
+spec:
+  template:
+    spec:
+      containers:
+      - name: controller
+        image: sandbox-controller:latest
+        args:
+        - --enable-file-log=true
+        - --log-file-path=/var/log/controller/controller.log
+        - --log-max-size=100
+        - --log-max-backups=10
+        - --log-max-age=30
+        - --log-compress=true
+        - --zap-encoder=json
+        volumeMounts:
+        - name: log-volume
+          mountPath: /var/log/controller
+      volumes:
+      - name: log-volume
+        persistentVolumeClaim:
+          claimName: controller-logs
+```
+
+### Viewing Logs
+
+```bash
+# Current logs
+tail -f /var/log/sandbox-controller/controller.log
+
+# Compressed logs
+zcat /var/log/sandbox-controller/controller.log.2026-02-12T10-30-45.123.gz | less
+
+# Search for errors
+grep -i error /var/log/sandbox-controller/controller.log
+zgrep -i error /var/log/sandbox-controller/*.log*
+```
+
+## Integration with Monitoring Systems
+
+### Prometheus Metrics
+
+You can expose sandbox metrics to Prometheus by:
+
+1. Polling the `/metrics` endpoint periodically
+2. Converting JSON metrics to Prometheus format
+3. Using a metrics exporter sidecar
+
+### Kubernetes Events
+
+Monitor Kubernetes events for sandbox lifecycle changes:
+
+```bash
+kubectl get events --watch
+```
+
+### Custom Monitoring
+
+Example Python script for monitoring:
+
+```python
+import requests
+import time
+
+def monitor_sandbox(sandbox_id, api_key):
+    url = f"http://localhost:8080/v1/sandboxes/{sandbox_id}"
+    headers = {"OPEN-SANDBOX-API-KEY": api_key}
+    
+    while True:
+        response = requests.get(url, headers=headers)
+        if response.status_code == 200:
+            data = response.json()
+            print(f"State: {data['status']['state']}")
+            print(f"Memory: {data.get('metrics', {}).get('mem_used_mib', 'N/A')} MiB")
+        time.sleep(5)
+
+monitor_sandbox("sandbox-id", "your-api-key")
+```
+
+## Best Practices
+
+<AccordionGroup>
+  <Accordion title="Set up health check endpoints">
+    Configure health checks for both the server and individual sandboxes to enable:
+    - Automatic restart of failed containers
+    - Load balancer traffic routing
+    - Alert generation on service degradation
+  </Accordion>
+
+  <Accordion title="Monitor resource usage trends">
+    Track CPU and memory usage over time to:
+    - Identify resource-intensive workloads
+    - Optimize resource limits
+    - Predict capacity needs
+    - Detect memory leaks
+  </Accordion>
+
+  <Accordion title="Configure log rotation">
+    Always enable log rotation in production to:
+    - Prevent disk space exhaustion
+    - Maintain historical logs for debugging
+    - Compress old logs to save space
+    - Comply with retention policies
+  </Accordion>
+
+  <Accordion title="Use structured logging">
+    Enable JSON logging format for:
+    - Easy parsing by log aggregation tools
+    - Better searchability
+    - Integration with monitoring platforms
+    - Automated alerting
+  </Accordion>
+</AccordionGroup>

@@ -1,0 +1,156 @@
+---
+title: Chrome Browser Automation
+description: Run Chrome with remote debugging and VNC access in OpenSandbox
+icon: chrome
+---
+
+This example demonstrates running Chrome Browser in OpenSandbox with VNC server and remote debugging capabilities. The setup enables both visual access via VNC and programmatic control through Chrome DevTools Protocol.
+
+## Overview
+
+The Chrome sandbox image starts:
+- **Xtigervnc** server on display `:1` for visual access
+- **Chromium** browser with remote debugging enabled on port `9222`
+- **execd** daemon on port `44772` for command execution
+
+## Getting the Chrome Image
+
+You can either build the image from source or pull a pre-built version.
+
+### Build from Source
+
+```bash
+cd examples/chrome
+docker build -t opensandbox/chrome .
+```
+
+### Pull Pre-built Image
+
+```bash
+docker pull opensandbox/chrome:latest
+
+# For users in China, use Alibaba Cloud Registry:
+docker pull sandbox-registry.cn-zhangjiakou.cr.aliyuncs.com/opensandbox/chrome:latest
+```
+
+## Setup OpenSandbox Server
+
+Start the OpenSandbox server locally:
+
+```bash
+uv pip install opensandbox-server
+opensandbox-server init-config ~/.sandbox.toml --example docker
+opensandbox-server
+```
+
+## Usage Example
+
+Here's a complete example showing how to create a Chrome sandbox and access its endpoints:
+
+```python
+import asyncio
+from datetime import timedelta
+
+from opensandbox.sandbox import Sandbox
+from opensandbox.config import ConnectionConfig
+from opensandbox.exceptions import SandboxException
+
+async def main():
+    try:
+        sandbox = await Sandbox.create(
+            image="opensandbox/chrome:latest",
+            timeout=timedelta(minutes=5),
+            entrypoint=["/entrypoint"],
+            metadata={"examples.opensandbox.io": "chrome"},
+            connection_config=ConnectionConfig(
+                domain="localhost:8080"
+            )
+        )
+
+        # Get execd process endpoint
+        execd = await sandbox.get_endpoint(44772)
+        print(f"execd daemon running with {execd.endpoint}")
+
+        # Get VNC endpoint for visual access
+        vnc = await sandbox.get_endpoint(5901)
+        print(f"VNC running with {vnc.endpoint}")
+
+        # Get DevTools endpoint for programmatic control
+        devtools = await sandbox.get_endpoint(9222)
+        print(f"DevTools running with {devtools.endpoint}/json")
+
+    except SandboxException as e:
+        print(f"Sandbox Error: [{e.error.code}] {e.error.message}")
+    except Exception as e:
+        print(f"Error: {e}")
+
+if __name__ == "__main__":
+    asyncio.run(main())
+```
+
+Run the example:
+
+```bash
+uv pip install opensandbox
+uv run python examples/chrome/main.py
+```
+
+## Accessing the Browser
+
+### VNC Access
+
+Connect to the VNC endpoint using any VNC client:
+
+```text
+VNC running with endpoint='127.0.0.1:48379/proxy/5901'
+```
+
+This provides visual access to the Chrome browser running in the sandbox.
+
+### DevTools Protocol
+
+Access the Chrome DevTools Protocol for programmatic control:
+
+```text
+DevTools running with endpoint='127.0.0.1:48379/proxy/9222'/json
+```
+
+Example DevTools response:
+
+```json
+[{
+  "description": "",
+  "devtoolsFrontendUrl": "https://chrome-devtools-frontend.appspot.com/serve_rev/@71a0dbd6672e2ccb6d1008376cbb7acd315cb8d6/inspector.html?ws=127.0.0.1:52302/devtools/page/2215AF60AC345E4BA6D822389CFC743B",
+  "faviconUrl": "https://www.gstatic.com/images/branding/searchlogo/ico/favicon.ico",
+  "id": "2215AF60AC345E4BA6D822389CFC743B",
+  "title": "Google",
+  "type": "page",
+  "url": "https://www.google.com.hk/",
+  "webSocketDebuggerUrl": "ws://127.0.0.1:52302/devtools/page/2215AF60AC345E4BA6D822389CFC743B"
+}]
+```
+
+## Integration with MCP
+
+You can use the Chrome sandbox with Model Context Protocol (MCP) clients for AI-driven browser automation. See the [chrome-devtools-mcp](https://github.com/ChromeDevTools/chrome-devtools-mcp) project for integration details.
+
+## Available Endpoints
+
+| Port | Service | Description |
+|------|---------|-------------|
+| 44772 | execd | Command execution daemon |
+| 5901 | VNC | Visual access to browser |
+| 9222 | DevTools | Chrome DevTools Protocol |
+
+## Use Cases
+
+- **Web Scraping**: Use DevTools Protocol to extract data from websites
+- **Browser Testing**: Automate browser interactions for testing
+- **Visual Debugging**: Connect via VNC to see what the browser is doing
+- **AI Agents**: Enable AI models to interact with web content through MCP
+
+## References
+
+- [Chrome DevTools Protocol](https://chromedevtools.github.io/devtools-protocol/)
+- [chrome-devtools-mcp](https://github.com/ChromeDevTools/chrome-devtools-mcp)
+- [TigerVNC](https://tigervnc.org/)

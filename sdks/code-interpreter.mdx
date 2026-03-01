@@ -1,0 +1,525 @@
+---
+title: Code Interpreter SDK
+description: High-level SDK for executing code in Python, Java, Go, and TypeScript with state persistence
+icon: terminal
+---
+
+## Overview
+
+The Code Interpreter SDK provides a high-level API for executing code in secure, isolated sandboxes. It supports multiple programming languages with state persistence across executions, making it ideal for building interactive coding environments, notebooks, and AI coding assistants.
+
+### Key Features
+
+- **Multi-language support**: Python, Java, Go, TypeScript/Node.js
+- **State persistence**: Variables and imports retained across executions
+- **Isolated contexts**: Separate execution contexts for different languages
+- **Streaming output**: Real-time stdout/stderr handling
+- **Pre-configured runtimes**: Ready-to-use language environments
+
+## Prerequisites
+
+This SDK requires the `opensandbox/code-interpreter` Docker image, which includes pre-installed runtimes for supported languages.
+
+For detailed information about supported languages and versions, see the [Environment Documentation](https://github.com/opensandbox-io/opensandbox/tree/main/sandboxes/code-interpreter).
+
+## Installation
+
+<Tabs>
+  <Tab title="pip">
+    ```bash
+    pip install opensandbox-code-interpreter
+    ```
+  </Tab>
+  <Tab title="uv">
+    ```bash
+    uv add opensandbox-code-interpreter
+    ```
+  </Tab>
+</Tabs>
+
+## Quick Start
+
+<Tabs>
+  <Tab title="Async">
+    ```python
+    import asyncio
+    from datetime import timedelta
+
+    from code_interpreter import CodeInterpreter, SupportedLanguage
+    from opensandbox import Sandbox
+    from opensandbox.config import ConnectionConfig
+
+
+    async def main() -> None:
+        # 1. Configure connection
+        config = ConnectionConfig(
+            domain="api.opensandbox.io",
+            api_key="your-api-key",
+            request_timeout=timedelta(seconds=60),
+        )
+
+        # 2. Create a Sandbox with the code-interpreter image + runtime versions
+        sandbox = await Sandbox.create(
+            "opensandbox/code-interpreter:v1.0.1",
+            connection_config=config,
+            entrypoint=["/opt/opensandbox/code-interpreter.sh"],
+            env={
+                "PYTHON_VERSION": "3.11",
+                "JAVA_VERSION": "17",
+                "NODE_VERSION": "20",
+                "GO_VERSION": "1.24",
+            },
+        )
+
+        # 3. Use async context manager to ensure local resources are cleaned up
+        async with sandbox:
+            # 4. Create CodeInterpreter wrapper
+            interpreter = await CodeInterpreter.create(sandbox=sandbox)
+
+            # 5. Create an execution context (Python)
+            context = await interpreter.codes.create_context(SupportedLanguage.PYTHON)
+
+            # 6. Run code
+            result = await interpreter.codes.run(
+                "import sys\nprint(sys.version)\nresult = 2 + 2\nresult",
+                context=context,
+            )
+
+            # 7. Print output
+            if result.result:
+                print(result.result[0].text)
+
+            # 8. Cleanup remote instance (optional but recommended)
+            await sandbox.kill()
+
+
+    if __name__ == "__main__":
+        asyncio.run(main())
+    ```
+  </Tab>
+  <Tab title="Sync">
+    ```python
+    from datetime import timedelta
+
+    import httpx
+    from code_interpreter import CodeInterpreterSync
+    from opensandbox import SandboxSync
+    from opensandbox.config import ConnectionConfigSync
+
+    config = ConnectionConfigSync(
+        domain="api.opensandbox.io",
+        api_key="your-api-key",
+        request_timeout=timedelta(seconds=60),
+        transport=httpx.HTTPTransport(limits=httpx.Limits(max_connections=20)),
+    )
+
+    sandbox = SandboxSync.create(
+        "opensandbox/code-interpreter:v1.0.1",
+        connection_config=config,
+        entrypoint=["/opt/opensandbox/code-interpreter.sh"],
+        env={"PYTHON_VERSION": "3.11"},
+    )
+    with sandbox:
+        interpreter = CodeInterpreterSync.create(sandbox=sandbox)
+        result = interpreter.codes.run("result = 2 + 2\nresult")
+        if result.result:
+            print(result.result[0].text)
+        sandbox.kill()
+    ```
+  </Tab>
+</Tabs>
+
+## Runtime Configuration
+
+### Docker Image
+
+The Code Interpreter SDK relies on the `opensandbox/code-interpreter` image. Ensure your sandbox provider has this image available.
+
+### Language Version Selection
+
+Specify the desired version of a programming language by setting environment variables when creating the Sandbox.
+
+| Language | Environment Variable | Example Value | Default (if unset) |
+|----------|---------------------|---------------|-------------------|
+| Python | `PYTHON_VERSION` | `3.11` | Image default |
+| Java | `JAVA_VERSION` | `17` | Image default |
+| Node.js | `NODE_VERSION` | `20` | Image default |
+| Go | `GO_VERSION` | `1.24` | Image default |
+
+```python
+sandbox = await Sandbox.create(
+    "opensandbox/code-interpreter:v1.0.1",
+    connection_config=config,
+    entrypoint=["/opt/opensandbox/code-interpreter.sh"],
+    env={
+        "PYTHON_VERSION": "3.11",
+        "JAVA_VERSION": "17",
+        "NODE_VERSION": "20",
+        "GO_VERSION": "1.24",
+    },
+)
+```
+
+## Usage Examples
+
+### Default Language Context
+
+You can pass `language` directly (recommended: `SupportedLanguage.*`) and skip `create_context`. When `context.id` is omitted, execd will create/reuse a default session for that language, so state can persist across runs:
+
+```python
+from code_interpreter import SupportedLanguage
+
+execution = await interpreter.codes.run(
+    "result = 2 + 2\nresult",
+    language=SupportedLanguage.PYTHON,
+)
+assert execution.result and execution.result[0].text == "4"
+```
+
+#### State Persistence Example
+
+```python
+from code_interpreter import SupportedLanguage
+
+await interpreter.codes.run("x = 42", language=SupportedLanguage.PYTHON)
+execution = await interpreter.codes.run("result = x\nresult", language=SupportedLanguage.PYTHON)
+assert execution.result and execution.result[0].text == "42"
+```
+
+### Java Code Execution
+
+```python
+from code_interpreter import SupportedLanguage
+
+ctx = await interpreter.codes.create_context(SupportedLanguage.JAVA)
+execution = await interpreter.codes.run(
+    (
+        'System.out.println("Calculating sum...");\n'
+        + "int a = 10;\n"
+        + "int b = 20;\n"
+        + "int sum = a + b;\n"
+        + 'System.out.println("Sum: " + sum);\n'
+        + "sum"
+    ),
+    context=ctx,
+)
+
+print(execution.id)
+for msg in execution.logs.stdout:
+    print(msg.text)
+```
+
+### Python with State Persistence
+
+Variables defined in one execution are available in subsequent executions within the same context.
+
+```python
+from code_interpreter import SupportedLanguage
+
+ctx = await interpreter.codes.create_context(SupportedLanguage.PYTHON)
+
+await interpreter.codes.run(
+    "users = ['Alice', 'Bob', 'Charlie']\nprint(len(users))",
+    context=ctx,
+)
+
+result = await interpreter.codes.run(
+    "users.append('Dave')\nprint(users)\nresult = users\nresult",
+    context=ctx,
+)
+```
+
+### Streaming Output Handling
+
+Handle stdout/stderr and execution events in real-time.
+
+```python
+from opensandbox.models.execd import ExecutionHandlers
+from code_interpreter import SupportedLanguage
+
+async def on_stdout(msg):
+    print("STDOUT:", msg.text)
+
+async def on_stderr(msg):
+    print("STDERR:", msg.text)
+
+handlers = ExecutionHandlers(on_stdout=on_stdout, on_stderr=on_stderr)
+
+ctx = await interpreter.codes.create_context(SupportedLanguage.PYTHON)
+await interpreter.codes.run(
+    "import time\nfor i in range(5):\n    print(i)\n    time.sleep(0.5)",
+    context=ctx,
+    handlers=handlers,
+)
+```
+
+### Multi-Language Context Isolation
+
+Different languages run in isolated environments.
+
+```python
+from code_interpreter import SupportedLanguage
+
+py_ctx = await interpreter.codes.create_context(SupportedLanguage.PYTHON)
+go_ctx = await interpreter.codes.create_context(SupportedLanguage.GO)
+
+await interpreter.codes.run("print('Running in Python')", context=py_ctx)
+await interpreter.codes.run(
+    "package main\nfunc main() { println(\"Running in Go\") }",
+    context=go_ctx,
+)
+```
+
+### Go Code Execution
+
+```python
+from code_interpreter import SupportedLanguage
+
+ctx = await interpreter.codes.create_context(SupportedLanguage.GO)
+result = await interpreter.codes.run(
+    """
+package main
+
+import "fmt"
+
+func main() {
+    x := 10
+    y := 20
+    fmt.Printf("Sum: %d\\n", x+y)
+}
+    """,
+    context=ctx,
+)
+
+for msg in result.logs.stdout:
+    print(msg.text)
+```
+
+### TypeScript/Node.js Code Execution
+
+```python
+from code_interpreter import SupportedLanguage
+
+ctx = await interpreter.codes.create_context(SupportedLanguage.TYPESCRIPT)
+result = await interpreter.codes.run(
+    """
+const greeting: string = "Hello from TypeScript!";
+console.log(greeting);
+
+const sum = (a: number, b: number): number => a + b;
+console.log(`Sum: ${sum(10, 20)}`);
+    """,
+    context=ctx,
+)
+
+for msg in result.logs.stdout:
+    print(msg.text)
+```
+
+## API Reference
+
+### `CodeInterpreter`
+
+Main class for code execution operations.
+
+#### Methods
+
+<ParamField path="create" type="classmethod">
+  Creates a CodeInterpreter instance.
+  
+  **Parameters:**
+  - `sandbox` (Sandbox): An existing Sandbox instance with code-interpreter image
+  
+  **Returns:** `CodeInterpreter` instance
+</ParamField>
+
+<ParamField path="codes" type="property">
+  Access to code execution operations.
+  
+  **Returns:** `CodesClient`
+</ParamField>
+
+### `CodesClient`
+
+Handles code execution and context management.
+
+#### Methods
+
+<ParamField path="create_context" type="async method">
+  Creates a new execution context for a specific language.
+  
+  **Parameters:**
+  - `language` (SupportedLanguage): The programming language
+  
+  **Returns:** `ExecutionContext`
+</ParamField>
+
+<ParamField path="run" type="async method">
+  Executes code in a context or with a specified language.
+  
+  **Parameters:**
+  - `code` (str): The code to execute
+  - `context` (ExecutionContext, optional): Existing context
+  - `language` (SupportedLanguage, optional): Language (creates/reuses default context)
+  - `handlers` (ExecutionHandlers, optional): Stream handlers
+  
+  **Returns:** `Execution`
+</ParamField>
+
+### `SupportedLanguage`
+
+Enum of supported programming languages.
+
+- `SupportedLanguage.PYTHON`
+- `SupportedLanguage.JAVA`
+- `SupportedLanguage.GO`
+- `SupportedLanguage.TYPESCRIPT`
+- `SupportedLanguage.JAVASCRIPT`
+
+## Comparison: Code Interpreter vs Sandbox SDK
+
+| Feature | Code Interpreter SDK | Sandbox SDK |
+|---------|---------------------|-------------|
+| **Use Case** | Execute code snippets in multiple languages | General-purpose sandbox operations |
+| **State Persistence** | ✅ Built-in | Manual |
+| **Multi-language** | ✅ Python, Java, Go, TypeScript | Manual setup required |
+| **Execution Contexts** | ✅ Isolated contexts per language | N/A |
+| **File Operations** | Via underlying Sandbox | ✅ Full API |
+| **Command Execution** | Language-specific | ✅ Shell commands |
+| **Complexity** | Higher-level, simpler | Lower-level, more flexible |
+
+## Best Practices
+
+### 1. Reuse Contexts for Related Code
+
+```python
+# Good: Reuse context for related executions
+ctx = await interpreter.codes.create_context(SupportedLanguage.PYTHON)
+await interpreter.codes.run("import numpy as np", context=ctx)
+await interpreter.codes.run("arr = np.array([1, 2, 3])", context=ctx)
+await interpreter.codes.run("print(arr.mean())", context=ctx)
+
+# Avoid: Creating new context each time loses state
+```
+
+### 2. Use Default Contexts for Simple Use Cases
+
+```python
+# Simpler: Use language parameter for one-off executions
+result = await interpreter.codes.run(
+    "print('Hello')",
+    language=SupportedLanguage.PYTHON
+)
+```
+
+### 3. Handle Errors Gracefully
+
+```python
+try:
+    result = await interpreter.codes.run(
+        "print(undefined_variable)",
+        language=SupportedLanguage.PYTHON
+    )
+except Exception as e:
+    print(f"Execution error: {e}")
+```
+
+### 4. Clean Up Resources
+
+```python
+async with sandbox:
+    interpreter = await CodeInterpreter.create(sandbox=sandbox)
+    # ... use interpreter ...
+    await sandbox.kill()  # Explicitly terminate remote instance
+```
+
+## Examples
+
+### Building a REPL
+
+```python
+from code_interpreter import CodeInterpreter, SupportedLanguage
+from opensandbox import Sandbox
+from opensandbox.config import ConnectionConfig
+
+async def repl():
+    config = ConnectionConfig(
+        domain="api.opensandbox.io",
+        api_key="your-api-key"
+    )
+    
+    sandbox = await Sandbox.create(
+        "opensandbox/code-interpreter:v1.0.1",
+        connection_config=config,
+        entrypoint=["/opt/opensandbox/code-interpreter.sh"],
+        env={"PYTHON_VERSION": "3.11"},
+    )
+    
+    async with sandbox:
+        interpreter = await CodeInterpreter.create(sandbox=sandbox)
+        ctx = await interpreter.codes.create_context(SupportedLanguage.PYTHON)
+        
+        print("Python REPL (type 'exit' to quit)")
+        while True:
+            code = input(">>> ")
+            if code == "exit":
+                break
+            
+            try:
+                result = await interpreter.codes.run(code, context=ctx)
+                if result.result:
+                    print(result.result[0].text)
+                for msg in result.logs.stdout:
+                    print(msg.text)
+            except Exception as e:
+                print(f"Error: {e}")
+        
+        await sandbox.kill()
+```
+
+### Installing Packages
+
+```python
+from code_interpreter import SupportedLanguage
+
+ctx = await interpreter.codes.create_context(SupportedLanguage.PYTHON)
+
+# Install package
+await interpreter.codes.run(
+    "import subprocess\nsubprocess.run(['pip', 'install', 'requests'])",
+    context=ctx
+)
+
+# Use installed package
+result = await interpreter.codes.run(
+    """
+import requests
+response = requests.get('https://api.github.com')
+print(f"Status: {response.status_code}")
+    """,
+    context=ctx
+)
+```
+
+## Notes
+
+- **Lifecycle**: `CodeInterpreter` wraps an existing `Sandbox` instance and reuses its connection configuration.
+- **Asyncio/event loop**: Avoid sharing long-lived clients across multiple event loops (e.g. pytest-asyncio defaults).
+- **Image requirement**: Must use `opensandbox/code-interpreter` image or a compatible derivative.
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Sandbox SDK" icon="cube" href="/sdks/python">
+    Low-level SDK for direct sandbox control
+  </Card>
+  <Card title="Supported Languages" icon="language" href="https://github.com/opensandbox-io/opensandbox/tree/main/sandboxes/code-interpreter">
+    View language versions and capabilities
+  </Card>
+  <Card title="Examples" icon="code" href="/examples">
+    Browse more code examples
+  </Card>
+  <Card title="API Reference" icon="book" href="/api-reference">
+    Detailed API documentation
+  </Card>
+</CardGroup>

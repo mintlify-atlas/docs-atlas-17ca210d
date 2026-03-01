@@ -1,0 +1,439 @@
+---
+title: 'File Operations'
+description: 'Master file handling and manipulation within OpenSandbox environments'
+icon: 'file'
+---
+
+OpenSandbox provides comprehensive file operation capabilities, allowing you to read, write, and manipulate files within sandbox environments. This guide covers essential file operations with practical examples.
+
+## Overview
+
+The File Operations API enables:
+
+- **Writing files**: Create files with specific content and permissions
+- **Reading files**: Retrieve file contents as text or binary data
+- **Directory operations**: List, create, and navigate directories
+- **File metadata**: Access file permissions, sizes, and timestamps
+- **Batch operations**: Write multiple files in a single operation
+
+## Basic File Operations
+
+<Steps>
+  <Step title="Setup">
+    Import the required modules and create a sandbox:
+
+    ```python
+    import asyncio
+    from datetime import timedelta
+
+    from opensandbox import Sandbox
+    from opensandbox.models import WriteEntry
+
+    async def main() -> None:
+        sandbox = await Sandbox.create(
+            "opensandbox/code-interpreter:v1.0.1",
+            entrypoint=["/opt/opensandbox/code-interpreter.sh"],
+            timeout=timedelta(minutes=10),
+        )
+
+        async with sandbox:
+            # File operations go here
+            pass
+
+        await sandbox.kill()
+    ```
+  </Step>
+
+  <Step title="Write a single file">
+    Create a file with text content:
+
+    ```python
+            # Write a text file
+            await sandbox.files.write_files([
+                WriteEntry(
+                    path="/tmp/hello.txt",
+                    data="Hello OpenSandbox!",
+                    mode=644  # rw-r--r--
+                )
+            ])
+
+            print("File written successfully")
+    ```
+
+    The `WriteEntry` model accepts:
+    - **path**: Absolute file path in the sandbox
+    - **data**: File content as string or bytes
+    - **mode**: Unix file permissions (e.g., 644, 755)
+  </Step>
+
+  <Step title="Read a file">
+    Retrieve file contents:
+
+    ```python
+            # Read the file
+            content = await sandbox.files.read_file("/tmp/hello.txt")
+            print(f"File content: {content}")
+            # Output: File content: Hello OpenSandbox!
+    ```
+  </Step>
+
+  <Step title="Write multiple files">
+    Create several files in one operation:
+
+    ```python
+            # Write multiple files at once
+            files_to_write = [
+                WriteEntry(
+                    path="/tmp/config.json",
+                    data='{"version": "1.0", "enabled": true}',
+                    mode=644
+                ),
+                WriteEntry(
+                    path="/tmp/script.sh",
+                    data="#!/bin/bash\necho 'Script running'\n",
+                    mode=755  # rwxr-xr-x (executable)
+                ),
+                WriteEntry(
+                    path="/tmp/data.txt",
+                    data="Sample data\nLine 2\nLine 3",
+                    mode=644
+                ),
+            ]
+
+            await sandbox.files.write_files(files_to_write)
+            print(f"Successfully wrote {len(files_to_write)} files")
+    ```
+  </Step>
+
+  <Step title="List directory contents">
+    Use shell commands to explore directories:
+
+    ```python
+            # List files in /tmp
+            result = await sandbox.commands.run("ls -lh /tmp")
+            print("Directory contents:")
+            for line in result.logs.stdout:
+                print(line.text)
+    ```
+
+    **Output:**
+    ```text
+    Directory contents:
+    -rw-r--r-- 1 user user   41 Mar 01 10:30 config.json
+    -rw-r--r-- 1 user user   25 Mar 01 10:30 data.txt
+    -rw-r--r-- 1 user user   19 Mar 01 10:30 hello.txt
+    -rwxr-xr-x 1 user user   35 Mar 01 10:30 script.sh
+    ```
+  </Step>
+
+  <Step title="Read and verify files">
+    Read back the files to verify content:
+
+    ```python
+            # Read JSON config
+            config = await sandbox.files.read_file("/tmp/config.json")
+            print(f"Config: {config}")
+            # Output: Config: {"version": "1.0", "enabled": true}
+
+            # Read script
+            script = await sandbox.files.read_file("/tmp/script.sh")
+            print(f"Script: {script}")
+            # Output: Script: #!/bin/bash\necho 'Script running'
+
+            # Execute the script
+            exec_result = await sandbox.commands.run("bash /tmp/script.sh")
+            print(f"Script output: {exec_result.logs.stdout[0].text}")
+            # Output: Script output: Script running
+    ```
+  </Step>
+</Steps>
+
+## Advanced File Operations
+
+### Working with Binary Files
+
+Write and read binary data:
+
+```python
+import base64
+
+# Create binary data (example: small PNG)
+binary_data = base64.b64decode(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+)
+
+# Write binary file
+await sandbox.files.write_files([
+    WriteEntry(
+        path="/tmp/image.png",
+        data=binary_data,
+        mode=644
+    )
+])
+
+# Verify file was written
+result = await sandbox.commands.run("file /tmp/image.png")
+print(result.logs.stdout[0].text)
+# Output: /tmp/image.png: PNG image data, 1 x 1, 8-bit/color RGBA
+```
+
+### Creating Directory Structures
+
+```python
+# Create nested directories
+await sandbox.commands.run("mkdir -p /tmp/project/src /tmp/project/tests")
+
+# Write files into directory structure
+project_files = [
+    WriteEntry(
+        path="/tmp/project/README.md",
+        data="# My Project\n\nProject documentation here.",
+        mode=644
+    ),
+    WriteEntry(
+        path="/tmp/project/src/main.py",
+        data="def main():\n    print('Hello World')\n\nif __name__ == '__main__':\n    main()",
+        mode=644
+    ),
+    WriteEntry(
+        path="/tmp/project/tests/test_main.py",
+        data="import unittest\n\nclass TestMain(unittest.TestCase):\n    def test_example(self):\n        self.assertTrue(True)",
+        mode=644
+    ),
+]
+
+await sandbox.files.write_files(project_files)
+
+# Verify structure
+tree_result = await sandbox.commands.run("find /tmp/project -type f")
+for line in tree_result.logs.stdout:
+    print(line.text)
+```
+
+### File Permissions and Metadata
+
+```python
+# Create file with specific permissions
+await sandbox.files.write_files([
+    WriteEntry(
+        path="/tmp/executable.sh",
+        data="#!/bin/bash\necho 'Running...'",
+        mode=755  # Owner: rwx, Group: rx, Others: rx
+    )
+])
+
+# Check permissions
+perms = await sandbox.commands.run("ls -l /tmp/executable.sh")
+print(perms.logs.stdout[0].text)
+# Output: -rwxr-xr-x 1 user user 31 Mar 01 10:30 /tmp/executable.sh
+
+# Execute the file
+result = await sandbox.commands.run("/tmp/executable.sh")
+print(result.logs.stdout[0].text)
+# Output: Running...
+```
+
+## Complete Working Example
+
+```python
+import asyncio
+from datetime import timedelta
+
+from opensandbox import Sandbox
+from opensandbox.models import WriteEntry
+
+
+async def main() -> None:
+    # Create sandbox
+    sandbox = await Sandbox.create(
+        "opensandbox/code-interpreter:v1.0.1",
+        entrypoint=["/opt/opensandbox/code-interpreter.sh"],
+        timeout=timedelta(minutes=10),
+    )
+
+    async with sandbox:
+        print("=== File Operations Demo ===")
+
+        # 1. Write multiple files
+        print("\n1. Writing files...")
+        await sandbox.files.write_files([
+            WriteEntry(
+                path="/tmp/hello.txt",
+                data="Hello OpenSandbox!",
+                mode=644
+            ),
+            WriteEntry(
+                path="/tmp/config.json",
+                data='{"version": "1.0", "enabled": true}',
+                mode=644
+            ),
+            WriteEntry(
+                path="/tmp/script.sh",
+                data="#!/bin/bash\necho 'Script is running'\n",
+                mode=755
+            ),
+        ])
+        print("Files written successfully")
+
+        # 2. List directory contents
+        print("\n2. Directory contents:")
+        ls_result = await sandbox.commands.run("ls -lh /tmp/*.{txt,json,sh}")
+        for line in ls_result.logs.stdout:
+            print(f"  {line.text}")
+
+        # 3. Read files
+        print("\n3. Reading files:")
+        hello_content = await sandbox.files.read_file("/tmp/hello.txt")
+        print(f"  hello.txt: {hello_content}")
+
+        config_content = await sandbox.files.read_file("/tmp/config.json")
+        print(f"  config.json: {config_content}")
+
+        # 4. Execute script
+        print("\n4. Executing script:")
+        exec_result = await sandbox.commands.run("bash /tmp/script.sh")
+        print(f"  Output: {exec_result.logs.stdout[0].text}")
+
+        # 5. Create directory structure
+        print("\n5. Creating project structure:")
+        await sandbox.commands.run("mkdir -p /tmp/myapp/src")
+        await sandbox.files.write_files([
+            WriteEntry(
+                path="/tmp/myapp/README.md",
+                data="# My Application\n\nBuilt with OpenSandbox",
+                mode=644
+            ),
+            WriteEntry(
+                path="/tmp/myapp/src/app.py",
+                data="print('Application started')",
+                mode=644
+            ),
+        ])
+
+        tree_result = await sandbox.commands.run("find /tmp/myapp -type f")
+        print("  Project files:")
+        for line in tree_result.logs.stdout:
+            print(f"    {line.text}")
+
+    # Cleanup
+    await sandbox.kill()
+    print("\n=== Demo completed ===")
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
+```
+
+## Expected Output
+
+```text
+=== File Operations Demo ===
+
+1. Writing files...
+Files written successfully
+
+2. Directory contents:
+  -rw-r--r-- 1 user user 41 Mar 01 10:30 /tmp/config.json
+  -rw-r--r-- 1 user user 19 Mar 01 10:30 /tmp/hello.txt
+  -rwxr-xr-x 1 user user 35 Mar 01 10:30 /tmp/script.sh
+
+3. Reading files:
+  hello.txt: Hello OpenSandbox!
+  config.json: {"version": "1.0", "enabled": true}
+
+4. Executing script:
+  Output: Script is running
+
+5. Creating project structure:
+  Project files:
+    /tmp/myapp/README.md
+    /tmp/myapp/src/app.py
+
+=== Demo completed ===
+```
+
+## Best Practices
+
+<AccordionGroup>
+  <Accordion title="Use appropriate file permissions">
+    - Use `644` (rw-r--r--) for data files
+    - Use `755` (rwxr-xr-x) for executable scripts
+    - Use `600` (rw-------) for sensitive files
+  </Accordion>
+
+  <Accordion title="Batch write operations">
+    When writing multiple files, use a single `write_files()` call instead of multiple individual writes for better performance.
+  </Accordion>
+
+  <Accordion title="Handle file paths correctly">
+    Always use absolute paths in the sandbox. The working directory may vary depending on the image configuration.
+  </Accordion>
+
+  <Accordion title="Verify file operations">
+    After critical file operations, use shell commands to verify files were created correctly:
+    
+    ```python
+    # Check if file exists
+    result = await sandbox.commands.run("test -f /tmp/myfile.txt && echo 'exists' || echo 'missing'")
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Common Use Cases
+
+### Configuration Files
+
+Write configuration files before running applications:
+
+```python
+await sandbox.files.write_files([
+    WriteEntry(
+        path="/app/config.yaml",
+        data="""database:
+  host: localhost
+  port: 5432
+logging:
+  level: INFO""",
+        mode=644
+    )
+])
+```
+
+### Data Processing
+
+Write input data, process it, and read results:
+
+```python
+# Write input data
+await sandbox.files.write_files([
+    WriteEntry(path="/data/input.csv", data="name,age\nAlice,30\nBob,25", mode=644)
+])
+
+# Process with Python
+await sandbox.commands.run(
+    "python -c \"import csv; "
+    "data = list(csv.DictReader(open('/data/input.csv'))); "
+    "avg = sum(int(r['age']) for r in data) / len(data); "
+    "print(f'Average age: {avg}')\""
+)
+
+# Read results
+result = await sandbox.files.read_file("/data/output.txt")
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Basic Sandbox" icon="cube" href="/examples/basic-sandbox">
+    Go back to basic sandbox operations
+  </Card>
+  <Card title="Code Interpreter" icon="code" href="/examples/code-interpreter-basics">
+    Learn code execution capabilities
+  </Card>
+  <Card title="AIO Sandbox" icon="rocket" href="https://github.com/alibaba/OpenSandbox/tree/main/examples/aio-sandbox">
+    Explore All-in-One sandbox with browser automation
+  </Card>
+  <Card title="API Reference" icon="book" href="/api-reference/python/sandbox">
+    Complete file operations API documentation
+  </Card>
+</CardGroup>

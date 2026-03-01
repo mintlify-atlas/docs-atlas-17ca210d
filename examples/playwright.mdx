@@ -1,0 +1,216 @@
+---
+title: Playwright Web Scraping
+description: Run headless Playwright browser automation in OpenSandbox
+icon: browser
+---
+
+This example demonstrates using Playwright with Chromium in headless mode within OpenSandbox to scrape web pages, extract content, and capture screenshots.
+
+## Overview
+
+The Playwright sandbox image includes:
+- **Playwright** Python package
+- **Chromium** browser binaries
+- **Node.js and npm** (for Playwright MCP integration)
+- Non-root user (`playwright`) for security
+
+## Building the Image
+
+Build the Playwright sandbox image from the Dockerfile:
+
+```bash
+cd examples/playwright
+docker build -t opensandbox/playwright:latest .
+```
+
+### Pull Pre-built Image
+
+Alternatively, pull the pre-built image:
+
+```bash
+docker pull sandbox-registry.cn-zhangjiakou.cr.aliyuncs.com/opensandbox/playwright:latest
+```
+
+## Setup OpenSandbox Server
+
+Start the local OpenSandbox server:
+
+```bash
+uv pip install opensandbox-server
+opensandbox-server init-config ~/.sandbox.toml --example docker
+opensandbox-server
+```
+
+## Complete Example
+
+This example launches Chromium in headless mode, navigates to a URL, extracts content, and captures a full-page screenshot:
+
+```python
+import asyncio
+import os
+from datetime import timedelta
+from pathlib import Path
+
+from opensandbox import Sandbox
+from opensandbox.config import ConnectionConfig
+
+
+async def _print_logs(label: str, execution) -> None:
+    """Helper to print execution logs"""
+    for msg in execution.logs.stdout:
+        print(f"[{label} stdout] {msg.text}")
+    for msg in execution.logs.stderr:
+        print(f"[{label} stderr] {msg.text}")
+    if execution.error:
+        print(f"[{label} error] {execution.error.name}: {execution.error.value}")
+
+
+async def main() -> None:
+    domain = os.getenv("SANDBOX_DOMAIN", "localhost:8080")
+    api_key = os.getenv("SANDBOX_API_KEY")
+    image = os.getenv(
+        "SANDBOX_IMAGE",
+        "opensandbox/playwright:latest",
+    )
+    python_version = os.getenv("PYTHON_VERSION", "3.11")
+
+    config = ConnectionConfig(
+        domain=domain,
+        api_key=api_key,
+        request_timeout=timedelta(seconds=60),
+    )
+
+    # Create sandbox with Python version environment variable
+    env = {"PYTHON_VERSION": python_version}
+    sandbox = await Sandbox.create(
+        image,
+        connection_config=config,
+        env=env,
+    )
+
+    async with sandbox:
+        # Run Playwright script to scrape a webpage
+        browse_exec = await sandbox.commands.run(
+            "python - <<'PY'\n"
+            "import asyncio\n"
+            "import os\n"
+            "from pathlib import Path\n"
+            "from playwright.async_api import async_playwright\n"
+            "\n"
+            "URL = os.environ.get('TARGET_URL', 'https://example.com')\n"
+            "SCREENSHOT_PATH = Path('/home/playwright/screenshot.png')\n"
+            "SCREENSHOT_PATH.parent.mkdir(parents=True, exist_ok=True)\n"
+            "\n"
+            "async def run():\n"
+            "    async with async_playwright() as p:\n"
+            "        browser = await p.chromium.launch(headless=True)\n"
+            "        page = await browser.new_page()\n"
+            "        await page.goto(URL, wait_until='networkidle')\n"
+            "        title = await page.title()\n"
+            "        content = await page.text_content('body')\n"
+            "        await page.screenshot(path=str(SCREENSHOT_PATH), full_page=True)\n"
+            "        print('title:', title)\n"
+            "        print('screenshot saved at:', SCREENSHOT_PATH)\n"
+            "        if content:\n"
+            "            snippet = content.strip().replace('\\n', ' ')\n"
+            "            print('content snippet:', snippet[:300])\n"
+            "        await browser.close()\n"
+            "\n"
+            "asyncio.run(run())\n"
+            "PY"
+        )
+        await _print_logs("browse", browse_exec)
+
+        # Download screenshot from sandbox to local disk
+        screenshot_remote = "/home/playwright/screenshot.png"
+        screenshot_local = Path("screenshot.png")
+        try:
+            data = await sandbox.files.read_bytes(screenshot_remote)
+            screenshot_local.write_bytes(data)
+            print(f"\nDownloaded screenshot to: {screenshot_local.resolve()}")
+        except Exception as e:
+            print(f"\nFailed to download screenshot from {screenshot_remote}: {e}")
+
+        await sandbox.kill()
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
+```
+
+Run the example:
+
+```bash
+uv pip install opensandbox
+uv run python examples/playwright/main.py
+```
+
+## Example Output
+
+The script will:
+1. Launch Chromium in headless mode
+2. Navigate to the target URL (defaults to `https://example.com`)
+3. Extract the page title and body content
+4. Capture a full-page screenshot
+5. Download the screenshot to your local directory
+
+```text
+[browse stdout] title: Example Domain
+[browse stdout] screenshot saved at: /home/playwright/screenshot.png
+[browse stdout] content snippet: Example Domain This domain is for use in illustrative examples in documents. You may use this domain in literature without prior coordination or asking for permission. More information...
+
+Downloaded screenshot to: /path/to/screenshot.png
+```
+
+![Playwright screenshot example](https://raw.githubusercontent.com/opensandbox-io/opensandbox/main/examples/playwright/screenshot.png)
+
+## Features
+
+### Headless Browser Automation
+
+- Chromium runs in headless mode (no GUI required)
+- Full Playwright API available for complex interactions
+- Network idle detection for reliable page loading
+
+### Screenshot Capture
+
+- Full-page screenshots supported
+- Files can be downloaded from sandbox to local system
+- Useful for visual verification and debugging
+
+### Content Extraction
+
+- Extract text content from any element
+- Get page metadata (title, description, etc.)
+- Access rendered content after JavaScript execution
+
+## Environment Variables
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `SANDBOX_DOMAIN` | `localhost:8080` | OpenSandbox server address |
+| `SANDBOX_API_KEY` | - | API key for authentication |
+| `SANDBOX_IMAGE` | `opensandbox/playwright:latest` | Docker image to use |
+| `PYTHON_VERSION` | `3.11` | Python version in sandbox |
+| `TARGET_URL` | `https://example.com` | URL to scrape |
+
+## Use Cases
+
+- **Web Scraping**: Extract data from dynamic websites
+- **Testing**: Automate browser testing workflows
+- **Monitoring**: Capture screenshots for change detection
+- **Data Collection**: Gather content from multiple sources
+- **AI Agents**: Enable AI to interact with web content
+
+## Security Benefits
+
+- Browser runs in isolated sandbox environment
+- Non-root user prevents privilege escalation
+- Network isolation available through OpenSandbox
+- No impact on host system if browser is compromised
+
+## References
+
+- [Playwright Documentation](https://playwright.dev/)
+- [Playwright Python API](https://playwright.dev/python/)
+- [Chromium DevTools Protocol](https://chromedevtools.github.io/devtools-protocol/)

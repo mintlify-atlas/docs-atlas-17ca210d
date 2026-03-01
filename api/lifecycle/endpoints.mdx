@@ -1,0 +1,144 @@
+---
+title: "Get Sandbox Endpoint"
+api: "GET /v1/sandboxes/{sandboxId}/endpoints/{port}"
+description: "Get public access endpoint for a service running in the sandbox"
+---
+
+Get the public access endpoint URL for accessing a service running on a specific port within the sandbox. The service must be listening on the specified port inside the sandbox for the endpoint to be available.
+
+## Path Parameters
+
+<ParamField path="sandboxId" type="string" required>
+  Unique sandbox identifier
+</ParamField>
+
+<ParamField path="port" type="integer" required>
+  Port number where the service is listening inside the sandbox
+  
+  - Minimum: 1
+  - Maximum: 65535
+</ParamField>
+
+## Query Parameters
+
+<ParamField query="use_server_proxy" type="boolean">
+  Whether to return a server-proxied URL
+  
+  Default: `false`
+</ParamField>
+
+## Response
+
+<ResponseField name="endpoint" type="string">
+  Public URL to access the service from outside the sandbox.
+  
+  Format: `{endpoint-host}/sandboxes/{sandboxId}/port/{port}`
+  
+  Example: `endpoint.opensandbox.io/sandboxes/abc123/port/8080`
+</ResponseField>
+
+<ResponseField name="headers" type="object">
+  Requests targeting the sandbox must include the corresponding header(s).
+  
+  Key-value pairs where keys are header names and values are header values.
+</ResponseField>
+
+## Response Headers
+
+<ResponseField name="X-Request-ID" type="string">
+  Unique request identifier for tracing
+</ResponseField>
+
+## Status Code
+
+<ResponseField name="200" type="OK">
+  Endpoint retrieved successfully.
+  
+  Returns the public URL for accessing the service on the specified port.
+</ResponseField>
+
+## Error Responses
+
+<ResponseField name="401" type="Unauthorized">
+  Authentication credentials are missing or invalid
+</ResponseField>
+
+<ResponseField name="403" type="Forbidden">
+  The authenticated user lacks permission for this operation
+</ResponseField>
+
+<ResponseField name="404" type="Not Found">
+  The requested sandbox does not exist
+</ResponseField>
+
+<ResponseField name="500" type="Internal Server Error">
+  An unexpected server error occurred
+</ResponseField>
+
+## Example Request
+
+```bash
+curl -X GET http://localhost:8080/v1/sandboxes/sandbox-abc123/endpoints/8080 \
+  -H "OPEN-SANDBOX-API-KEY: your-api-key"
+```
+
+## Example Response
+
+```json
+{
+  "endpoint": "endpoint.opensandbox.io/sandboxes/sandbox-abc123/port/8080",
+  "headers": {
+    "X-Sandbox-Token": "token-value"
+  }
+}
+```
+
+## Usage Notes
+
+### Service Availability
+
+The service must be actively listening on the specified port inside the sandbox for the endpoint to be functional. If your application hasn't started listening yet, the endpoint URL will be returned but connections may fail until the service is ready.
+
+### Required Headers
+
+When making requests to the returned endpoint URL, you must include any headers specified in the `headers` field of the response. These headers are required for authentication and routing to the correct sandbox.
+
+### Example with Headers
+
+```bash
+curl http://endpoint.opensandbox.io/sandboxes/sandbox-abc123/port/8080 \
+  -H "X-Sandbox-Token: token-value"
+```
+
+### Common Use Cases
+
+1. **Web Applications**: Access web servers running inside sandboxes (e.g., Flask, Express)
+2. **APIs**: Connect to API servers for testing or integration
+3. **Development Servers**: Access development tools like Jupyter notebooks or debugging interfaces
+4. **Database Connections**: Connect to databases running in sandboxes (though consider using internal networking for production)
+
+### Port Forwarding
+
+The endpoint acts as a public gateway to services inside the sandbox. The sandbox's internal port is mapped to the public endpoint URL, allowing external access without exposing the sandbox directly.
+
+### Security Considerations
+
+- Endpoint URLs include authentication tokens in the required headers
+- Endpoints are scoped to specific sandboxes and ports
+- Access is controlled via API key authentication
+- Consider using `use_server_proxy=true` for additional security layers
+
+## Server Proxy Mode
+
+When `use_server_proxy=true` is specified, the returned endpoint URL will route through a server-side proxy for additional security and monitoring capabilities.
+
+```bash
+curl -X GET "http://localhost:8080/v1/sandboxes/sandbox-abc123/endpoints/8080?use_server_proxy=true" \
+  -H "OPEN-SANDBOX-API-KEY: your-api-key"
+```
+
+Benefits of server proxy mode:
+- Enhanced security through additional authentication layers
+- Request/response logging and monitoring
+- Rate limiting and access control
+- Protocol translation and compatibility layers

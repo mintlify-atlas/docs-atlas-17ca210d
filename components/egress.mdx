@@ -1,0 +1,364 @@
+---
+title: 'Egress'
+description: 'FQDN-based egress control sidecar for network policy enforcement'
+icon: 'shield-halved'
+---
+
+## Overview
+
+The OpenSandbox Egress Sidecar provides **FQDN-based egress control** for sandbox environments. It runs alongside the sandbox application container (sharing the same network namespace) and enforces declared network policies to control outbound traffic.
+
+<Warning>
+**Status**: Implementing. Currently supports Layer 1 (DNS Proxy). Layer 2 (Network Filter) is on the roadmap.
+
+See [OSEP-0001: FQDN-based Egress Control](https://github.com/alibaba/OpenSandbox/blob/main/oseps/0001-fqdn-based-egress-control.md) for the detailed design.
+</Warning>
+
+## Features
+
+- **FQDN-based Allowlist**: Control outbound traffic by domain name (e.g., `api.github.com`)
+- **Wildcard Support**: Allow subdomains using wildcards (e.g., `*.pypi.org`)
+- **Transparent Interception**: Uses transparent DNS proxying; no application configuration required
+- **Dynamic DNS**: Resolved IPs are added to nftables with TTL for network-layer enforcement
+- **Privilege Isolation**: Requires `CAP_NET_ADMIN` only for the sidecar; application runs unprivileged
+- **Graceful Degradation**: Warns and disables enforcement if `CAP_NET_ADMIN` is missing instead of crashing
+
+## Architecture
+
+The egress control is implemented as a **Sidecar** that shares the network namespace with the sandbox application.
+
+### Layer 1: DNS Proxy
+
+- Runs on `127.0.0.1:15353`
+- `iptables` rules redirect all port 53 (DNS) traffic to this proxy
+- Filters queries based on the allowlist
+- Returns `NXDOMAIN` for denied domains
+
+### Layer 2: Network Filter (dns+nft mode)
+
+When `OPENSANDBOX_EGRESS_MODE=dns+nft`:
+
+- Uses `nftables` to enforce IP-level allow/deny rules
+- Resolved IPs for allowed domains are added to dynamic allow sets with TTL (dynamic DNS)
+- At startup, the sidecar whitelists:
+  - **127.0.0.1** (redirect target for the DNS proxy)
+  - **Nameserver IPs** from `/etc/resolv.conf` (so DNS resolution and proxy upstream work, including private DNS)
+
+<Note>
+Nameserver count is capped and invalid IPs are filtered. See [Configuration](#configuration) for details.
+</Note>
+
+## Requirements
+
+- **Runtime**: Docker or Kubernetes
+- **Capabilities**: `CAP_NET_ADMIN` (for the sidecar container only)
+- **Kernel**: Linux kernel with `iptables` and `nftables` support
+
+## Configuration
+
+### Policy Bootstrap & Runtime
+
+- **Default**: Deny-all
+- **Seed initial policy**: Via `OPENSANDBOX_EGRESS_RULES` (JSON, same shape as `/policy`)
+- **Runtime updates**: Via `/policy` HTTP endpoint
+- **Reset to deny-all**: POST empty body to `/policy`
+
+### HTTP Service
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `OPENSANDBOX_EGRESS_HTTP_ADDR` | `:18080` | Listen address |
+| `OPENSANDBOX_EGRESS_TOKEN` | (empty) | Auth token; if unset, endpoint is open |
+
+**Authentication**: Use header `OPENSANDBOX-EGRESS-AUTH: <token>`
+
+### Egress Mode
+
+| Mode | Description |
+|------|-------------|
+| `dns` (default) | DNS proxy only, no nftables (IP/CIDR rules have no effect at L2) |
+| `dns+nft` | Enable nftables; if nft apply fails, fallback to `dns`. Required for IP/CIDR enforcement and DoH/DoT blocking |
+
+**Environment**: `OPENSANDBOX_EGRESS_MODE`
+
+### DNS and Nameserver Whitelist (dns+nft mode)
+
+In `dns+nft` mode, the sidecar automatically allows:
+
+- **127.0.0.1** — so packets redirected by iptables to the proxy are accepted by nft
+- **Nameserver IPs** from `/etc/resolv.conf` — so client DNS and proxy upstream work (e.g., private DNS)
+
+Nameserver IPs are validated (unspecified and loopback are skipped) and capped:
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `OPENSANDBOX_EGRESS_MAX_NS` | `3` | Max nameservers to whitelist (`0` = no cap, `1-10` = cap) |
+
+<Warning>
+See [SECURITY-RISKS.md](https://github.com/alibaba/OpenSandbox/blob/main/components/egress/SECURITY-RISKS.md) for trust and scope of this whitelist.
+</Warning>
+
+### DoH/DoT Blocking
+
+- **DoT** (tcp/udp 853): Blocked by default
+- **DoH over 443**: Optional via `OPENSANDBOX_EGRESS_BLOCK_DOH_443=true`
+  - If enabled without blocklist, all 443 traffic is dropped
+- **DoH blocklist**: `OPENSANDBOX_EGRESS_DOH_BLOCKLIST="9.9.9.9,1.1.1.1/32,2001:db8::/32"`
+
+## Runtime HTTP API
+
+Default listen address: `:18080` (override with `OPENSANDBOX_EGRESS_HTTP_ADDR`)
+
+### Endpoints
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/policy` | GET | Returns the current policy |
+| `/policy` | POST | Replaces the policy (empty body resets to deny-all) |
+
+### Policy Examples
+
+#### DNS Allowlist (default deny)
+
+```bash
+curl -XPOST http://127.0.0.1:18080/policy \
+  -d '{
+    "defaultAction": "deny",
+    "egress": [
+      {"action": "allow", "target": "*.bing.com"}
+    ]
+  }'
+```
+
+#### DNS Blocklist (default allow)
+
+```bash
+curl -XPOST http://127.0.0.1:18080/policy \
+  -d '{
+    "defaultAction": "allow",
+    "egress": [
+      {"action": "deny", "target": "*.bing.com"}
+    ]
+  }'
+```
+
+#### IP/CIDR Only
+
+```bash
+curl -XPOST http://127.0.0.1:18080/policy \
+  -d '{
+    "defaultAction": "deny",
+    "egress": [
+      {"action": "allow", "target": "1.1.1.1"},
+      {"action": "deny", "target": "10.0.0.0/8"}
+    ]
+  }'
+```
+
+#### Mixed DNS + IP/CIDR
+
+```bash
+curl -XPOST http://127.0.0.1:18080/policy \
+  -d '{
+    "defaultAction": "deny",
+    "egress": [
+      {"action": "allow", "target": "*.example.com"},
+      {"action": "allow", "target": "203.0.113.0/24"},
+      {"action": "deny", "target": "*.bad.com"}
+    ]
+  }'
+```
+
+## Build & Run
+
+### Build Docker Image
+
+```bash
+# Build locally
+docker build -t opensandbox/egress:local .
+
+# Or use the build script (multi-arch)
+./build.sh
+```
+
+### Run Locally (Docker)
+
+To test the sidecar with a sandbox application:
+
+<Steps>
+  <Step title="Start the Sidecar">
+    Creates the network namespace:
+    
+    ```bash
+    docker run -d --name sandbox-egress \
+      --cap-add=NET_ADMIN \
+      opensandbox/egress:local
+    ```
+    
+    <Note>
+    `CAP_NET_ADMIN` is required for `iptables` redirection.
+    </Note>
+  </Step>
+  
+  <Step title="Configure Policy">
+    After start, push policy via HTTP:
+    
+    ```bash
+    curl -XPOST http://11.167.84.130:18080/policy \
+      -H "OPENSANDBOX-EGRESS-AUTH: $OPENSANDBOX_EGRESS_TOKEN" \
+      -d '{
+        "defaultAction": "deny",
+        "egress": [
+          {"action": "allow", "target": "*.bing.com"}
+        ]
+      }'
+    ```
+  </Step>
+  
+  <Step title="Start Application">
+    Shares sidecar's network:
+    
+    ```bash
+    docker run --rm -it \
+      --network container:sandbox-egress \
+      curlimages/curl \
+      sh
+    ```
+  </Step>
+  
+  <Step title="Verify">
+    Inside the application container:
+    
+    ```bash
+    # Allowed domain
+    curl -I https://google.com  # Should succeed
+
+    # Denied domain
+    curl -I https://github.com  # Should fail (resolve error)
+    ```
+  </Step>
+</Steps>
+
+## Server Integration
+
+The egress sidecar is automatically injected when using `networkPolicy` in sandbox creation requests.
+
+### Server Configuration
+
+```toml
+[runtime]
+type = "docker"
+execd_image = "opensandbox/execd:v1.0.6"
+
+[egress]
+image = "opensandbox/egress:v1.0.1"
+```
+
+<Warning>
+- Only supported in Docker bridge mode
+- Requests with `networkPolicy` are rejected when `network_mode=host` or `egress.image` is not configured
+</Warning>
+
+### Example Request
+
+```json
+{
+  "image": {"uri": "python:3.11-slim"},
+  "entrypoint": ["python", "-m", "http.server", "8000"],
+  "timeout": 3600,
+  "resourceLimits": {"cpu": "500m", "memory": "512Mi"},
+  "networkPolicy": {
+    "defaultAction": "deny",
+    "egress": [
+      {"action": "allow", "target": "pypi.org"},
+      {"action": "allow", "target": "*.python.org"}
+    ]
+  }
+}
+```
+
+### Sidecar Behavior
+
+- Main container shares the sidecar netns and explicitly drops `NET_ADMIN`
+- Sidecar keeps `NET_ADMIN` to manage iptables
+- IPv6 is disabled in the shared namespace when egress sidecar is injected
+- Sidecar image is pulled before start
+- Delete/expire/failure paths attempt to clean up the sidecar
+
+## Development
+
+### Project Structure
+
+- **Language**: Go 1.24+
+- **Key Packages**:
+  - `pkg/dnsproxy`: DNS server and policy matching logic
+  - `pkg/iptables`: `iptables` rule management
+  - `pkg/nftables`: nftables static/dynamic rules and DNS-resolved IP sets
+  - `pkg/policy`: Policy parsing and definition
+- **Main (egress)**:
+  - `nameserver.go`: Builds the list of IPs to whitelist for DNS in nft mode
+
+### Testing
+
+```bash
+# Run tests
+go test ./...
+```
+
+### E2E Benchmark: dns vs dns+nft
+
+Compares **dns** (pass-through, no nft write) and **dns+nft** (sync `AddResolvedIPs` before each DNS reply):
+
+```bash
+./tests/bench-dns-nft.sh
+```
+
+More details in [docs/benchmark.md](https://github.com/alibaba/OpenSandbox/blob/main/components/egress/docs/benchmark.md).
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="iptables setup failed">
+    **Issue**: Sidecar cannot set up iptables rules
+    
+    **Solution**: Ensure the sidecar container has `--cap-add=NET_ADMIN`
+  </Accordion>
+  
+  <Accordion title="DNS resolution fails for all domains">
+    **Possible Causes**:
+    
+    1. Check if the upstream DNS (from `/etc/resolv.conf`) is reachable
+    2. In `dns+nft` mode, the sidecar whitelists nameserver IPs from resolv.conf at startup
+    3. Check logs for `[dns] whitelisting proxy listen + N nameserver(s)`
+    4. Ensure `/etc/resolv.conf` is readable and contains valid, reachable nameservers
+    
+    **Behavior**:
+    - The proxy prefers the first non-loopback nameserver from resolv.conf
+    - If only loopback exists (e.g., Docker 127.0.0.11), it is used (proxy upstream traffic bypasses the redirect)
+    - Fallback to 8.8.8.8 only when resolv.conf is empty or unreadable
+  </Accordion>
+  
+  <Accordion title="Traffic not blocked">
+    **Issue**: Network policies are not being enforced
+    
+    **Possible Causes**:
+    1. If nftables apply fails, the sidecar falls back to dns mode
+    2. Check logs for nftables errors
+    3. Verify `nft list table inet opensandbox`
+    4. Ensure `CAP_NET_ADMIN` is granted to the sidecar
+  </Accordion>
+</AccordionGroup>
+
+## Security Considerations
+
+See [SECURITY-RISKS.md](https://github.com/alibaba/OpenSandbox/blob/main/components/egress/SECURITY-RISKS.md) for detailed security considerations including:
+
+- Nameserver whitelist trust model
+- DNS resolver scope and limitations
+- Best practices for production deployments
+
+## Support
+
+- **Issues**: [GitHub Issues](https://github.com/alibaba/OpenSandbox/issues)
+- **Documentation**: [OpenSandbox Docs](https://github.com/alibaba/OpenSandbox/wiki)
+- **Community**: [Discussions](https://github.com/alibaba/OpenSandbox/discussions)

@@ -1,0 +1,467 @@
+---
+title: Server Configuration
+description: Complete reference for OpenSandbox server configuration options
+---
+
+OpenSandbox Server uses TOML configuration files to control runtime behavior, networking, security, and resource management. This guide covers all available configuration options.
+
+## Configuration File Location
+
+By default, the server looks for configuration at `~/.sandbox.toml`. Override with:
+
+```bash
+# Environment variable
+export SANDBOX_CONFIG_PATH=/path/to/config.toml
+opensandbox-server
+
+# Command-line flag
+opensandbox-server --config /path/to/config.toml
+```
+
+## Initialize Configuration
+
+Generate a configuration file with examples:
+
+```bash
+# Docker runtime
+opensandbox-server init-config ~/.sandbox.toml --example docker
+
+# Kubernetes runtime
+opensandbox-server init-config ~/.sandbox.toml --example k8s
+
+# Full schema (no defaults, just placeholders)
+opensandbox-server init-config ~/.sandbox.toml
+
+# Force overwrite existing file
+opensandbox-server init-config ~/.sandbox.toml --example docker --force
+```
+
+## Server Configuration
+
+Control the HTTP server settings:
+
+```toml
+[server]
+host = "0.0.0.0"
+port = 8080
+log_level = "INFO"
+api_key = "your-secret-api-key-change-this"
+```
+
+### Options
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `host` | string | `"0.0.0.0"` | Interface to bind. Use `"127.0.0.1"` for localhost only |
+| `port` | integer | `8080` | Port to listen on |
+| `log_level` | string | `"INFO"` | Python logging level: `DEBUG`, `INFO`, `WARNING`, `ERROR`, `CRITICAL` |
+| `api_key` | string | `null` | API key for authentication. If empty, authentication is disabled |
+
+### Log Levels
+
+- **DEBUG**: Detailed diagnostic information
+- **INFO**: General informational messages
+- **WARNING**: Warning messages for potential issues
+- **ERROR**: Error messages for failures
+- **CRITICAL**: Critical errors that may cause shutdown
+
+### API Authentication
+
+Authentication is enforced only when `api_key` is set:
+
+- **Empty or missing**: Middleware skips API key checks (for local/dev)
+- **Non-empty**: All endpoints (except `/health`, `/docs`, `/redoc`) require `OPEN-SANDBOX-API-KEY` header
+
+```bash
+curl -H "OPEN-SANDBOX-API-KEY: your-secret-api-key" \
+  http://localhost:8080/v1/sandboxes
+```
+
+## Runtime Configuration
+
+Select and configure the sandbox runtime backend:
+
+```toml
+[runtime]
+type = "docker"  # or "kubernetes"
+execd_image = "opensandbox/execd:v1.0.6"
+```
+
+### Options
+
+| Key | Type | Required | Description |
+|-----|------|----------|-------------|
+| `type` | string | Yes | Runtime implementation: `"docker"` or `"kubernetes"` |
+| `execd_image` | string | Yes | Container image with execd binary for sandbox initialization |
+
+## Docker Runtime Configuration
+
+Docker-specific settings:
+
+```toml
+[docker]
+network_mode = "bridge"
+api_timeout = 300
+host_ip = "10.57.1.91"
+drop_capabilities = [
+  "AUDIT_WRITE",
+  "MKNOD",
+  "NET_ADMIN",
+  "NET_RAW",
+  "SYS_ADMIN",
+  "SYS_MODULE",
+  "SYS_PTRACE",
+  "SYS_TIME",
+  "SYS_TTY_CONFIG"
+]
+no_new_privileges = true
+apparmor_profile = ""
+pids_limit = 512
+seccomp_profile = ""
+```
+
+### Options
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `network_mode` | string | `"host"` | Network mode: `"host"` (shared network) or `"bridge"` (isolated) |
+| `api_timeout` | integer | `180` | Docker API timeout in seconds |
+| `host_ip` | string | `null` | Host IP/hostname for bridge-mode endpoints when server runs in a container |
+| `drop_capabilities` | array | `[]` | Linux capabilities to drop from containers |
+| `no_new_privileges` | boolean | `false` | Block privilege escalation in containers |
+| `apparmor_profile` | string | `""` | AppArmor profile name (e.g., `"docker-default"`) |
+| `pids_limit` | integer | `null` | Max processes per container. `null` = unlimited |
+| `seccomp_profile` | string | `""` | Seccomp profile path. Empty = Docker default |
+
+### Network Mode Comparison
+
+| Feature | Host Mode | Bridge Mode |
+|---------|-----------|-------------|
+| Performance | Best | Good |
+| Isolation | None | Full |
+| Port conflicts | Yes | No |
+| Multiple sandboxes | Limited | Unlimited |
+| Network policies | No | Yes (with egress sidecar) |
+
+### Security Capabilities
+
+Recommended capabilities to drop:
+
+- `AUDIT_WRITE`: Prevent audit log manipulation
+- `MKNOD`: Block device node creation
+- `NET_ADMIN`: Disable network configuration
+- `NET_RAW`: Prevent raw socket creation
+- `SYS_ADMIN`: Block administrative operations
+- `SYS_MODULE`: Prevent kernel module loading
+- `SYS_PTRACE`: Disable process tracing
+- `SYS_TIME`: Block system clock changes
+- `SYS_TTY_CONFIG`: Prevent TTY configuration
+
+## Kubernetes Runtime Configuration
+
+Kubernetes-specific settings:
+
+```toml
+[kubernetes]
+kubeconfig_path = "~/.kube/config"
+namespace = "opensandbox"
+workload_provider = "batchsandbox"
+batchsandbox_template_file = "~/batchsandbox-template.yaml"
+informer_enabled = true
+informer_resync_seconds = 300
+informer_watch_timeout_seconds = 60
+```
+
+### Options
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `kubeconfig_path` | string | `null` | Path to kubeconfig. `null` = in-cluster config |
+| `namespace` | string | `"opensandbox"` | Namespace for sandbox workloads |
+| `workload_provider` | string | `"batchsandbox"` | Provider type: `"batchsandbox"` or `"agent-sandbox"` |
+| `batchsandbox_template_file` | string | `null` | Path to BatchSandbox template YAML |
+| `informer_enabled` | boolean | `true` | Enable watch-based cache (beta) |
+| `informer_resync_seconds` | integer | `300` | Full list refresh interval (beta) |
+| `informer_watch_timeout_seconds` | integer | `60` | Watch restart interval (beta) |
+
+### Informer Configuration (Beta)
+
+Informers reduce API server load through watch-based caching:
+
+- **Enabled by default**: Set `informer_enabled = false` to disable
+- **Resync interval**: How often to perform full list refresh
+- **Watch timeout**: How long before restarting watch connection
+- **Tune for your cluster**: Adjust based on API rate limits
+
+## Egress Configuration
+
+Configure egress sidecar for network policy enforcement:
+
+```toml
+[egress]
+image = "opensandbox/egress:v1.0.1"
+```
+
+### Options
+
+| Key | Type | Required | Description |
+|-----|------|----------|-------------|
+| `image` | string | **Required when using `networkPolicy`** | Egress sidecar container image |
+
+### Network Policy Requirements
+
+- Only supported in Docker **bridge** mode
+- Egress image must be configured
+- Requests with `networkPolicy` are rejected in host mode
+- Main container shares sidecar network namespace
+- Main container drops `NET_ADMIN` capability
+- Sidecar retains `NET_ADMIN` for iptables management
+- IPv6 disabled in shared namespace
+
+## Ingress Configuration
+
+Control how clients access sandbox endpoints:
+
+```toml
+[ingress]
+mode = "direct"  # or "gateway"
+
+# Gateway configuration (when mode = "gateway")
+[ingress.gateway]
+address = "*.example.com"
+
+[ingress.gateway.route]
+mode = "wildcard"  # or "uri" or "header"
+```
+
+### Options
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `mode` | string | `"direct"` | Ingress mode: `"direct"` or `"gateway"` |
+| `gateway.address` | string | `null` | Gateway address (domain, IP, or IP:port). No scheme. |
+| `gateway.route.mode` | string | `"wildcard"` | Routing mode: `"wildcard"`, `"uri"`, or `"header"` |
+
+### Ingress Modes
+
+#### Direct Mode
+
+```toml
+[ingress]
+mode = "direct"
+```
+
+Clients connect directly to sandboxes. Required for Docker runtime.
+
+#### Gateway Mode with Wildcard Routing
+
+```toml
+[ingress]
+mode = "gateway"
+
+[ingress.gateway]
+address = "*.example.com"
+
+[ingress.gateway.route]
+mode = "wildcard"
+```
+
+Endpoint format: `<sandbox-id>-<port>.example.com/path/to/request`
+
+#### Gateway Mode with URI Routing
+
+```toml
+[ingress]
+mode = "gateway"
+
+[ingress.gateway]
+address = "10.0.0.1:8000"
+
+[ingress.gateway.route]
+mode = "uri"
+```
+
+Endpoint format: `10.0.0.1:8000/<sandbox-id>/<port>/path/to/request`
+
+#### Gateway Mode with Header Routing
+
+```toml
+[ingress]
+mode = "gateway"
+
+[ingress.gateway]
+address = "gateway.example.com"
+
+[ingress.gateway.route]
+mode = "header"
+```
+
+Endpoint format: `gateway.example.com` with header `OpenSandbox-Ingress-To: <sandbox-id>-<port>`
+
+## Storage Configuration
+
+Control host path access for volume bind mounts:
+
+```toml
+[storage]
+allowed_host_paths = ["/data/opensandbox", "/tmp/sandbox"]
+```
+
+### Options
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `allowed_host_paths` | array | `[]` | Allowlist of host path prefixes for bind mounts |
+
+### Behavior
+
+- **Empty list**: All host paths allowed (not recommended for production)
+- **Non-empty list**: Only paths starting with listed prefixes are allowed
+- Applies to volume bind mount requests
+
+## Agent-Sandbox Configuration
+
+Configuration for agent-sandbox workload provider:
+
+```toml
+[agent_sandbox]
+template_file = "/path/to/sandbox-template.yaml"
+shutdown_policy = "Delete"
+ingress_enabled = true
+```
+
+### Options
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `template_file` | string | `null` | Sandbox CR YAML template path |
+| `shutdown_policy` | string | `"Delete"` | Shutdown policy: `"Delete"` or `"Retain"` |
+| `ingress_enabled` | boolean | `true` | Whether ingress routing is enabled |
+
+## Environment Variables
+
+Override configuration with environment variables:
+
+| Variable | Description | Example |
+|----------|-------------|--------|
+| `SANDBOX_CONFIG_PATH` | Override config file location | `/etc/opensandbox/config.toml` |
+| `DOCKER_HOST` | Docker daemon URL | `unix:///var/run/docker.sock` or `ssh://user@host` |
+| `PENDING_FAILURE_TTL` | TTL for failed pending sandboxes (seconds) | `3600` (default) |
+
+## Complete Configuration Examples
+
+### Production Docker Setup
+
+```toml
+[server]
+host = "0.0.0.0"
+port = 8080
+log_level = "INFO"
+api_key = "production-secret-key-use-vault-or-secrets-manager"
+
+[runtime]
+type = "docker"
+execd_image = "opensandbox/execd:v1.0.6"
+
+[egress]
+image = "opensandbox/egress:v1.0.1"
+
+[storage]
+allowed_host_paths = ["/data/opensandbox"]
+
+[docker]
+network_mode = "bridge"
+api_timeout = 300
+drop_capabilities = [
+  "AUDIT_WRITE", "MKNOD", "NET_ADMIN", "NET_RAW",
+  "SYS_ADMIN", "SYS_MODULE", "SYS_PTRACE", "SYS_TIME",
+  "SYS_TTY_CONFIG"
+]
+no_new_privileges = true
+pids_limit = 512
+
+[ingress]
+mode = "gateway"
+
+[ingress.gateway]
+address = "*.sandbox.example.com"
+
+[ingress.gateway.route]
+mode = "wildcard"
+```
+
+### Production Kubernetes Setup
+
+```toml
+[server]
+host = "0.0.0.0"
+port = 8080
+log_level = "INFO"
+api_key = "production-secret-key-use-vault-or-secrets-manager"
+
+[runtime]
+type = "kubernetes"
+execd_image = "opensandbox/execd:v1.0.6"
+
+[storage]
+allowed_host_paths = []
+
+[kubernetes]
+kubeconfig_path = null  # Use in-cluster config
+namespace = "opensandbox-prod"
+workload_provider = "batchsandbox"
+batchsandbox_template_file = "/etc/opensandbox/batchsandbox-template.yaml"
+informer_enabled = true
+informer_resync_seconds = 300
+informer_watch_timeout_seconds = 60
+
+[ingress]
+mode = "gateway"
+
+[ingress.gateway]
+address = "*.sandbox.example.com"
+
+[ingress.gateway.route]
+mode = "wildcard"
+```
+
+### Development Setup
+
+```toml
+[server]
+host = "127.0.0.1"
+port = 8080
+log_level = "DEBUG"
+# api_key not set - authentication disabled
+
+[runtime]
+type = "docker"
+execd_image = "opensandbox/execd:v1.0.6"
+
+[docker]
+network_mode = "host"
+
+[ingress]
+mode = "direct"
+```
+
+## Configuration Validation
+
+The server validates configuration at startup:
+
+```bash
+opensandbox-server
+```
+
+Common validation errors:
+
+- **Missing required fields**: `runtime.type` and `runtime.execd_image` are required
+- **Invalid runtime type**: Must be `"docker"` or `"kubernetes"`
+- **Network policy misconfiguration**: `egress.image` required when using `networkPolicy`
+- **Invalid log level**: Must be a valid Python logging level
+
+## Next Steps
+
+- [Docker runtime setup](/deployment/docker-runtime)
+- [Kubernetes runtime deployment](/deployment/kubernetes-runtime)
+- [Security best practices](/deployment/security)

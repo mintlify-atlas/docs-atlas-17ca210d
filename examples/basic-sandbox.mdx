@@ -1,0 +1,231 @@
+---
+title: 'Basic Sandbox Creation'
+description: 'Learn how to create and manage sandboxes with OpenSandbox'
+icon: 'cube'
+---
+
+This guide walks you through creating a basic sandbox, executing commands, and performing file operations using the OpenSandbox SDK.
+
+## Prerequisites
+
+Before you begin, ensure you have:
+
+- Docker installed and running
+- Python 3.10 or higher
+- OpenSandbox server installed and configured
+
+## Installation
+
+<Steps>
+  <Step title="Install OpenSandbox packages">
+    Install the required Python packages using `uv` or `pip`:
+
+    ```bash
+    uv pip install opensandbox opensandbox-code-interpreter
+    ```
+  </Step>
+
+  <Step title="Start the OpenSandbox server">
+    Initialize the configuration and start the server:
+
+    ```bash
+    uv pip install opensandbox-server
+    opensandbox-server init-config ~/.sandbox.toml --example docker
+    opensandbox-server
+    ```
+
+    <Note>
+      The server runs in the foreground. Open a new terminal window to run the example code.
+    </Note>
+  </Step>
+</Steps>
+
+## Creating Your First Sandbox
+
+<Steps>
+  <Step title="Import required modules">
+    Start by importing the necessary modules from the OpenSandbox SDK:
+
+    ```python
+    import asyncio
+    from datetime import timedelta
+
+    from code_interpreter import CodeInterpreter, SupportedLanguage
+    from opensandbox import Sandbox
+    from opensandbox.models import WriteEntry
+    ```
+  </Step>
+
+  <Step title="Create a sandbox instance">
+    Create a sandbox with the Code Interpreter image:
+
+    ```python
+    async def main() -> None:
+        # Create a sandbox
+        sandbox = await Sandbox.create(
+            "opensandbox/code-interpreter:v1.0.1",
+            entrypoint=["/opt/opensandbox/code-interpreter.sh"],
+            env={"PYTHON_VERSION": "3.11"},
+            timeout=timedelta(minutes=10),
+        )
+    ```
+
+    The `create` method accepts:
+    - **Image name**: Docker image to use for the sandbox
+    - **Entrypoint**: Command to run when the container starts
+    - **Environment variables**: Custom environment configuration
+    - **Timeout**: Maximum sandbox lifetime
+  </Step>
+
+  <Step title="Execute commands">
+    Use the sandbox context manager to execute shell commands:
+
+    ```python
+        async with sandbox:
+            # Execute a shell command
+            execution = await sandbox.commands.run("echo 'Hello OpenSandbox!'")
+            print(execution.logs.stdout[0].text)
+    ```
+
+    The `commands.run()` method executes shell commands and returns:
+    - **stdout**: Standard output from the command
+    - **stderr**: Standard error output
+    - **exit_code**: Command exit code
+  </Step>
+
+  <Step title="Perform file operations">
+    Write and read files within the sandbox:
+
+    ```python
+            # Write a file
+            await sandbox.files.write_files([
+                WriteEntry(path="/tmp/hello.txt", data="Hello World", mode=644)
+            ])
+
+            # Read a file
+            content = await sandbox.files.read_file("/tmp/hello.txt")
+            print(f"Content: {content}")  # Content: Hello World
+    ```
+  </Step>
+
+  <Step title="Execute code with Code Interpreter">
+    Create a code interpreter and run Python code:
+
+    ```python
+            # Create a code interpreter
+            interpreter = await CodeInterpreter.create(sandbox)
+
+            # Execute Python code
+            result = await interpreter.codes.run(
+                """
+                import sys
+                print(sys.version)
+                result = 2 + 2
+                result
+                """,
+                language=SupportedLanguage.PYTHON,
+            )
+
+            print(result.result[0].text)  # 4
+            print(result.logs.stdout[0].text)  # 3.11.14
+    ```
+  </Step>
+
+  <Step title="Clean up resources">
+    Always clean up the sandbox when you're done:
+
+    ```python
+        # Cleanup the sandbox
+        await sandbox.kill()
+
+    if __name__ == "__main__":
+        asyncio.run(main())
+    ```
+  </Step>
+</Steps>
+
+## Complete Example
+
+Here's the complete working example:
+
+```python
+import asyncio
+from datetime import timedelta
+
+from code_interpreter import CodeInterpreter, SupportedLanguage
+from opensandbox import Sandbox
+from opensandbox.models import WriteEntry
+
+async def main() -> None:
+    # 1. Create a sandbox
+    sandbox = await Sandbox.create(
+        "opensandbox/code-interpreter:v1.0.1",
+        entrypoint=["/opt/opensandbox/code-interpreter.sh"],
+        env={"PYTHON_VERSION": "3.11"},
+        timeout=timedelta(minutes=10),
+    )
+
+    async with sandbox:
+
+        # 2. Execute a shell command
+        execution = await sandbox.commands.run("echo 'Hello OpenSandbox!'")
+        print(execution.logs.stdout[0].text)
+
+        # 3. Write a file
+        await sandbox.files.write_files([
+            WriteEntry(path="/tmp/hello.txt", data="Hello World", mode=644)
+        ])
+
+        # 4. Read a file
+        content = await sandbox.files.read_file("/tmp/hello.txt")
+        print(f"Content: {content}") # Content: Hello World
+
+        # 5. Create a code interpreter
+        interpreter = await CodeInterpreter.create(sandbox)
+
+        # 6. Execute Python code
+        result = await interpreter.codes.run(
+              """
+                  import sys
+                  print(sys.version)
+                  result = 2 + 2
+                  result
+              """,
+              language=SupportedLanguage.PYTHON,
+        )
+
+        print(result.result[0].text) # 4
+        print(result.logs.stdout[0].text) # 3.11.14
+
+    # 7. Cleanup the sandbox
+    await sandbox.kill()
+
+if __name__ == "__main__":
+    asyncio.run(main())
+```
+
+## Expected Output
+
+```text
+Hello OpenSandbox!
+Content: Hello World
+4
+3.11.14
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Code Interpreter Basics" icon="code" href="/examples/code-interpreter-basics">
+    Learn how to execute code in multiple languages
+  </Card>
+  <Card title="File Operations" icon="folder" href="/examples/file-operations">
+    Master file handling within sandboxes
+  </Card>
+  <Card title="API Reference" icon="book" href="/api-reference/python/sandbox">
+    Explore the complete API documentation
+  </Card>
+  <Card title="More Examples" icon="grid" href="https://github.com/alibaba/OpenSandbox/tree/main/examples">
+    Browse advanced examples on GitHub
+  </Card>
+</CardGroup>

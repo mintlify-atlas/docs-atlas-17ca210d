@@ -1,0 +1,447 @@
+---
+title: "Command Execution"
+description: "Execute shell commands with foreground/background modes and status polling"
+---
+
+The Command Execution API enables running shell commands within the sandbox with support for both foreground (streaming) and background (detached) execution modes. Commands can be monitored, interrupted, and their output can be retrieved on demand.
+
+## Execute Command
+
+<RequestExample>
+```bash cURL Foreground
+curl -X POST http://localhost:44772/command \
+  -H "X-EXECD-ACCESS-TOKEN: your-token" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "command": "ls -la /workspace",
+    "cwd": "/workspace",
+    "background": false,
+    "timeout": 30000
+  }'
+```
+
+```bash cURL Background
+curl -X POST http://localhost:44772/command \
+  -H "X-EXECD-ACCESS-TOKEN: your-token" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "command": "python server.py",
+    "cwd": "/app",
+    "background": true,
+    "timeout": 120000
+  }'
+```
+
+```python Python
+import requests
+import json
+
+url = "http://localhost:44772/command"
+headers = {
+    "X-EXECD-ACCESS-TOKEN": "your-token",
+    "Content-Type": "application/json"
+}
+data = {
+    "command": "ls -la /workspace",
+    "cwd": "/workspace",
+    "background": False,
+    "timeout": 30000
+}
+
+response = requests.post(url, headers=headers, json=data, stream=True)
+
+for line in response.iter_lines():
+    if line:
+        decoded = line.decode('utf-8')
+        if decoded.startswith('data: '):
+            event_data = json.loads(decoded[6:])
+            print(f"Event: {event_data['type']}")
+            if event_data.get('text'):
+                print(event_data['text'], end='')
+```
+</RequestExample>
+
+Executes a shell command and streams the output in real-time using SSE (Server-Sent Events). The command can run in foreground or background mode.
+
+<ParamField body="command" type="string" required>
+  Shell command to execute
+</ParamField>
+
+<ParamField body="cwd" type="string">
+  Working directory for command execution (defaults to sandbox working directory)
+</ParamField>
+
+<ParamField body="background" type="boolean" default={false}>
+  Whether to run command in detached mode. 
+  - `false`: Streams output in real-time (foreground)
+  - `true`: Runs in background, retrieve logs via `/command/{id}/logs`
+</ParamField>
+
+<ParamField body="timeout" type="integer">
+  Maximum allowed execution time in milliseconds before the command is forcefully terminated by the server. If omitted, the server will not enforce any timeout.
+</ParamField>
+
+<ResponseField name="type" type="string">
+  Event type: `init`, `status`, `stdout`, `stderr`, `execution_complete`, `error`, `ping`
+</ResponseField>
+
+<ResponseField name="text" type="string">
+  Output text for stdout/stderr events
+</ResponseField>
+
+<ResponseField name="timestamp" type="integer">
+  When the event was generated (Unix milliseconds)
+</ResponseField>
+
+<ResponseField name="execution_time" type="integer">
+  Total execution duration in milliseconds (on completion)
+</ResponseField>
+
+<ResponseExample>
+```text SSE Stream (Foreground)
+data: {"type":"init","text":"cmd-abc123","timestamp":1700000000000}
+
+data: {"type":"stdout","text":"total 24\n","timestamp":1700000000100}
+
+data: {"type":"stdout","text":"drwxr-xr-x 3 admin admin 4096 Nov 16 10:30 .\n","timestamp":1700000000101}
+
+data: {"type":"stdout","text":"drwxr-xr-x 5 admin admin 4096 Nov 16 10:25 ..\n","timestamp":1700000000102}
+
+data: {"type":"execution_complete","execution_time":250,"timestamp":1700000000250}
+
+```
+
+```json Error Event
+{
+  "type": "error",
+  "text": "command not found: invalid-command",
+  "timestamp": 1700000000500
+}
+```
+</ResponseExample>
+
+---
+
+## Get Command Status
+
+<RequestExample>
+```bash cURL
+curl -X GET http://localhost:44772/command/status/cmd-abc123 \
+  -H "X-EXECD-ACCESS-TOKEN: your-token"
+```
+
+```python Python
+import requests
+
+command_id = "cmd-abc123"
+response = requests.get(
+    f"http://localhost:44772/command/status/{command_id}",
+    headers={"X-EXECD-ACCESS-TOKEN": "your-token"}
+)
+
+status = response.json()
+print(f"Running: {status['running']}")
+if not status['running']:
+    print(f"Exit code: {status['exit_code']}")
+```
+</RequestExample>
+
+Returns the current status of a command (foreground or background) by command ID. Includes running flag, exit code, error (if any), and start/finish timestamps.
+
+<ParamField path="id" type="string" required>
+  Command ID returned by RunCommand (from the `init` event)
+</ParamField>
+
+<ResponseField name="id" type="string">
+  Command ID
+</ResponseField>
+
+<ResponseField name="content" type="string">
+  Original command content
+</ResponseField>
+
+<ResponseField name="running" type="boolean">
+  Whether the command is still running
+</ResponseField>
+
+<ResponseField name="exit_code" type="integer" nullable>
+  Exit code if the command has finished (null if still running)
+</ResponseField>
+
+<ResponseField name="error" type="string">
+  Error message if the command failed
+</ResponseField>
+
+<ResponseField name="started_at" type="string">
+  Start time in RFC3339 format
+</ResponseField>
+
+<ResponseField name="finished_at" type="string" nullable>
+  Finish time in RFC3339 format (null if still running)
+</ResponseField>
+
+<ResponseExample>
+```json 200 Running
+{
+  "id": "cmd-abc123",
+  "content": "python server.py",
+  "running": true,
+  "exit_code": null,
+  "error": "",
+  "started_at": "2025-12-22T09:08:05Z",
+  "finished_at": null
+}
+```
+
+```json 200 Completed
+{
+  "id": "cmd-abc123",
+  "content": "ls -la",
+  "running": false,
+  "exit_code": 0,
+  "error": "",
+  "started_at": "2025-12-22T09:08:05Z",
+  "finished_at": "2025-12-22T09:08:09Z"
+}
+```
+
+```json 200 Failed
+{
+  "id": "cmd-abc123",
+  "content": "invalid-command",
+  "running": false,
+  "exit_code": 127,
+  "error": "command not found",
+  "started_at": "2025-12-22T09:08:05Z",
+  "finished_at": "2025-12-22T09:08:06Z"
+}
+```
+
+```json 404
+{
+  "code": "COMMAND_NOT_FOUND",
+  "message": "command not found"
+}
+```
+</ResponseExample>
+
+---
+
+## Get Background Command Logs
+
+<RequestExample>
+```bash cURL Full Logs
+curl -X GET http://localhost:44772/command/cmd-abc123/logs \
+  -H "X-EXECD-ACCESS-TOKEN: your-token"
+```
+
+```bash cURL Incremental
+curl -X GET "http://localhost:44772/command/cmd-abc123/logs?cursor=120" \
+  -H "X-EXECD-ACCESS-TOKEN: your-token"
+```
+
+```python Python
+import requests
+
+command_id = "cmd-abc123"
+response = requests.get(
+    f"http://localhost:44772/command/{command_id}/logs",
+    headers={"X-EXECD-ACCESS-TOKEN": "your-token"}
+)
+
+if response.status_code == 200:
+    logs = response.text
+    cursor = response.headers.get('EXECD-COMMANDS-TAIL-CURSOR')
+    print(logs)
+    print(f"Next cursor: {cursor}")
+```
+
+```python Python Polling
+import requests
+import time
+
+command_id = "cmd-abc123"
+cursor = None
+
+while True:
+    params = {"cursor": cursor} if cursor else {}
+    response = requests.get(
+        f"http://localhost:44772/command/{command_id}/logs",
+        headers={"X-EXECD-ACCESS-TOKEN": "your-token"},
+        params=params
+    )
+    
+    if response.status_code == 200:
+        logs = response.text
+        if logs:
+            print(logs, end='')
+        cursor = response.headers.get('EXECD-COMMANDS-TAIL-CURSOR')
+    
+    time.sleep(1)  # Poll every second
+```
+</RequestExample>
+
+Returns stdout and stderr for a background (detached) command by command ID. Foreground commands should be consumed via SSE; this endpoint is intended for polling logs of background commands.
+
+<Note>
+This endpoint supports incremental reads similar to a file seek. Pass a starting line via the `cursor` parameter to fetch output after that line and receive the latest tail cursor for the next poll.
+</Note>
+
+<ParamField path="id" type="string" required>
+  Command ID returned by RunCommand
+</ParamField>
+
+<ParamField query="cursor" type="integer">
+  Optional 0-based line cursor (behaves like a file seek). When provided, only stdout/stderr lines after this line are returned. If omitted, the full log is returned.
+</ParamField>
+
+<ResponseField name="body" type="string">
+  Plain text output containing stdout and stderr combined
+</ResponseField>
+
+<ResponseField name="EXECD-COMMANDS-TAIL-CURSOR" type="integer" header>
+  Highest available 0-based line index after applying the request cursor. Use this value as the next cursor for incremental reads.
+</ResponseField>
+
+<ResponseExample>
+```text 200 Full Logs
+line1
+line2
+warn: something on stderr
+line4
+```
+
+```text 200 Incremental (cursor=2)
+line4
+line5
+```
+</ResponseExample>
+
+---
+
+## Interrupt Command Execution
+
+<RequestExample>
+```bash cURL
+curl -X DELETE "http://localhost:44772/command?id=session-456" \
+  -H "X-EXECD-ACCESS-TOKEN: your-token"
+```
+
+```python Python
+import requests
+
+response = requests.delete(
+    "http://localhost:44772/command",
+    headers={"X-EXECD-ACCESS-TOKEN": "your-token"},
+    params={"id": "session-456"}
+)
+
+if response.status_code == 200:
+    print("Command interrupted")
+```
+</RequestExample>
+
+Interrupts the currently running command execution in the specified context. This sends a signal to terminate the execution process and releases associated resources.
+
+<ParamField query="id" type="string" required>
+  Session ID of the execution context to interrupt
+</ParamField>
+
+<ResponseExample>
+```json 200
+{}
+```
+</ResponseExample>
+
+## Foreground vs Background Mode
+
+### Foreground Mode (`background: false`)
+
+- Output is streamed in real-time via SSE
+- Connection remains open until command completes
+- Ideal for short-running commands and interactive use
+- Example: `ls`, `grep`, `find`
+
+```json
+{
+  "command": "ls -la /workspace",
+  "background": false
+}
+```
+
+### Background Mode (`background: true`)
+
+- Command runs in detached mode
+- Returns immediately with command ID
+- Use `/command/status/{id}` to check status
+- Use `/command/{id}/logs` to retrieve output
+- Ideal for long-running processes and servers
+- Example: `python server.py`, `npm run dev`
+
+```json
+{
+  "command": "python server.py",
+  "background": true,
+  "timeout": 300000
+}
+```
+
+## Timeout Handling
+
+When you specify a `timeout` (in milliseconds), the server will automatically terminate the command if it exceeds the specified duration:
+
+```json
+{
+  "command": "sleep 60",
+  "timeout": 5000  // Killed after 5 seconds
+}
+```
+
+If the command is terminated due to timeout:
+- The process receives a termination signal
+- The status will show `exit_code: null` and an error message
+- For foreground commands, you'll receive an `error` event in the stream
+
+## Use Cases
+
+### Run Tests
+
+```json
+{
+  "command": "pytest tests/ -v",
+  "cwd": "/workspace",
+  "background": false,
+  "timeout": 60000
+}
+```
+
+### Start Development Server
+
+```json
+{
+  "command": "npm run dev",
+  "cwd": "/workspace/app",
+  "background": true
+}
+```
+
+### Build Project
+
+```json
+{
+  "command": "make build",
+  "cwd": "/workspace",
+  "background": false,
+  "timeout": 300000
+}
+```
+
+### Search Files
+
+```json
+{
+  "command": "grep -r 'TODO' /workspace --include='*.py'",
+  "cwd": "/workspace",
+  "background": false
+}
+```

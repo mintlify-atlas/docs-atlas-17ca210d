@@ -1,0 +1,575 @@
+---
+title: 'Reinforcement Learning Training'
+description: 'Run RL training workflows in isolated sandboxes with OpenSandbox'
+icon: 'brain'
+---
+
+This example demonstrates running a reinforcement learning training loop (CartPole + DQN) inside an isolated OpenSandbox container. The sandbox installs RL dependencies, trains a policy, saves checkpoints, and returns training summaries.
+
+## Overview
+
+OpenSandbox provides an ideal environment for RL training:
+
+- **Isolated Execution**: Each agent trains in a clean, isolated environment
+- **Reproducible Results**: Consistent environment across training runs
+- **Scalable**: Run hundreds of parallel training jobs using BatchSandbox
+- **Safe**: Contained execution prevents system interference
+- **Portable**: Train locally or in Kubernetes clusters
+
+## Prerequisites
+
+<Steps>
+  <Step title="Install OpenSandbox">
+    ```bash
+    uv pip install opensandbox opensandbox-server
+    ```
+  </Step>
+
+  <Step title="Initialize Server Config">
+    ```bash
+    opensandbox-server init-config ~/.sandbox.toml --example docker
+    ```
+  </Step>
+
+  <Step title="Start OpenSandbox Server">
+    ```bash
+    opensandbox-server
+    ```
+  </Step>
+</Steps>
+
+## Basic RL Training Example
+
+### Training Script
+
+Create the training script that will run inside the sandbox:
+
+```python train.py
+import json
+import os
+import gymnasium as gym
+from stable_baselines3 import DQN
+from stable_baselines3.common.evaluation import evaluate_policy
+
+# Configuration
+timesteps = int(os.getenv("RL_TIMESTEPS", "5000"))
+tensorboard_log = os.getenv("RL_TENSORBOARD_LOG", "runs")
+
+# Create environment
+env = gym.make("CartPole-v1")
+
+# Initialize DQN agent
+model = DQN(
+    "MlpPolicy",
+    env,
+    verbose=1,
+    tensorboard_log=tensorboard_log,
+    learning_rate=1e-3,
+    buffer_size=10000,
+    learning_starts=1000,
+    batch_size=32,
+    train_freq=4,
+    gradient_steps=1,
+)
+
+# Train the agent
+model.learn(total_timesteps=timesteps)
+
+# Save checkpoint
+os.makedirs("checkpoints", exist_ok=True)
+checkpoint_path = "checkpoints/cartpole_dqn"
+model.save(checkpoint_path)
+
+# Evaluate policy
+mean_reward, std_reward = evaluate_policy(model, env, n_eval_episodes=5)
+
+# Save summary
+summary = {
+    "timesteps": timesteps,
+    "mean_reward": float(mean_reward),
+    "std_reward": float(std_reward),
+    "checkpoint_path": f"{checkpoint_path}.zip",
+}
+with open("training_summary.json", "w", encoding="utf-8") as f:
+    json.dump(summary, f, indent=2)
+
+print("Training summary:", summary)
+env.close()
+```
+
+### Requirements File
+
+```txt requirements.txt
+gymnasium==0.29.1
+stable-baselines3==2.3.2
+tensorboard==2.16.2
+torch==2.9.1
+```
+
+### Python Client
+
+```python main.py
+import asyncio
+import os
+import textwrap
+from datetime import timedelta
+from pathlib import Path
+from opensandbox import Sandbox
+from opensandbox.config import ConnectionConfig
+
+def _load_requirements() -> str:
+    requirements_path = Path(__file__).with_name("requirements.txt")
+    return requirements_path.read_text(encoding="utf-8")
+
+def _training_script() -> str:
+    # Load train.py content
+    script_path = Path(__file__).with_name("train.py")
+    return script_path.read_text(encoding="utf-8")
+
+def _with_python_env(command: str) -> str:
+    return (
+        "bash -lc '"
+        "source /opt/opensandbox/code-interpreter-env.sh "
+        "python ${PYTHON_VERSION:-3.14} >/dev/null "
+        "&& "
+        f"{command}"
+        "'"
+    )
+
+async def _print_execution_logs(execution) -> None:
+    for msg in execution.logs.stdout:
+        print(f"[stdout] {msg.text}")
+    for msg in execution.logs.stderr:
+        print(f"[stderr] {msg.text}")
+    if execution.error:
+        print(f"[error] {execution.error.name}: {execution.error.value}")
+
+async def _run_command(sandbox: Sandbox, command: str) -> bool:
+    execution = await sandbox.commands.run(command)
+    await _print_execution_logs(execution)
+    return execution.error is None
+
+async def main() -> None:
+    domain = os.getenv("SANDBOX_DOMAIN", "localhost:8080")
+    api_key = os.getenv("SANDBOX_API_KEY")
+    image = os.getenv(
+        "SANDBOX_IMAGE",
+        "sandbox-registry.cn-zhangjiakou.cr.aliyuncs.com/opensandbox/code-interpreter:v1.0.1"
+    )
+    timesteps = os.getenv("RL_TIMESTEPS", "5000")
+
+    config = ConnectionConfig(
+        domain=domain,
+        api_key=api_key,
+        request_timeout=timedelta(minutes=10),
+    )
+
+    # Create sandbox with RL environment variables
+    sandbox = await Sandbox.create(
+        image,
+        connection_config=config,
+        env={"RL_TIMESTEPS": timesteps},
+    )
+
+    async with sandbox:
+        try:
+            # Upload requirements
+            await sandbox.files.write_file("requirements.txt", _load_requirements())
+
+            # Install dependencies
+            print("Installing RL dependencies...")
+            install_cmd = _with_python_env(
+                "python3 -m pip install --no-cache-dir --break-system-packages -r requirements.txt"
+            )
+            if not await _run_command(sandbox, install_cmd):
+                print("Failed to install RL dependencies.")
+                return
+
+            # Upload and run training script
+            await sandbox.files.write_file("train.py", _training_script())
+            print("\nStarting RL training...")
+            train_exec = await sandbox.commands.run(_with_python_env("python3 train.py"))
+            await _print_execution_logs(train_exec)
+
+            if train_exec.error:
+                print("Training failed inside the sandbox.")
+                return
+
+            # Read training summary
+            try:
+                summary = await sandbox.files.read_file("training_summary.json")
+                print("\n=== Training Summary ===")
+                print(summary)
+            except Exception as exc:
+                print(f"\nFailed to read training summary: {exc}")
+        finally:
+            await sandbox.kill()
+
+if __name__ == "__main__":
+    asyncio.run(main())
+```
+
+### Run the Example
+
+```bash
+# Set environment variables (optional)
+export SANDBOX_DOMAIN="localhost:8080"
+export RL_TIMESTEPS="10000"
+
+# Run the training
+uv run python main.py
+```
+
+Expected output:
+```
+Installing RL dependencies...
+[stdout] Collecting gymnasium==0.29.1
+[stdout] Collecting stable-baselines3==2.3.2
+...
+
+Starting RL training...
+[stdout] ---------------------------------
+[stdout] | rollout/           |          |
+[stdout] |    ep_len_mean     | 22.5     |
+[stdout] |    ep_rew_mean     | 22.5     |
+[stdout] | time/              |          |
+[stdout] |    total_timesteps | 10000    |
+[stdout] ---------------------------------
+
+=== Training Summary ===
+{
+  "timesteps": 10000,
+  "mean_reward": 195.4,
+  "std_reward": 12.8,
+  "checkpoint_path": "checkpoints/cartpole_dqn.zip"
+}
+```
+
+## Advanced: Batch RL Training
+
+Scale up to hundreds of parallel training runs using BatchSandbox:
+
+### Step 1: Deploy Kubernetes Controller
+
+See [Kubernetes Deployment](/examples/kubernetes-deployment) for full setup.
+
+### Step 2: Create RL Training Pool
+
+```yaml rl-pool.yaml
+apiVersion: sandbox.opensandbox.io/v1alpha1
+kind: Pool
+metadata:
+  name: rl-training-pool
+  namespace: opensandbox
+spec:
+  template:
+    spec:
+      containers:
+      - name: sandbox
+        image: opensandbox/code-interpreter:v1.0.1
+        resources:
+          requests:
+            memory: "2Gi"
+            cpu: "1000m"
+          limits:
+            memory: "4Gi"
+            cpu: "2000m"
+  capacitySpec:
+    bufferMax: 50
+    bufferMin: 10
+    poolMax: 200
+    poolMin: 20
+```
+
+```bash
+kubectl apply -f rl-pool.yaml
+```
+
+### Step 3: Launch Batch Training
+
+```yaml rl-batch.yaml
+apiVersion: sandbox.opensandbox.io/v1alpha1
+kind: BatchSandbox
+metadata:
+  name: rl-training-batch
+  namespace: opensandbox
+spec:
+  replicas: 100  # Train 100 agents in parallel
+  poolRef: rl-training-pool
+  taskTemplate:
+    spec:
+      process:
+        command: ["bash"]
+        args:
+        - "-c"
+        - |
+          source /opt/opensandbox/code-interpreter-env.sh &&
+          python3 -m pip install gymnasium stable-baselines3 &&
+          python3 /workspace/train.py
+        env:
+        - name: RL_TIMESTEPS
+          value: "50000"
+```
+
+```bash
+kubectl apply -f rl-batch.yaml
+
+# Monitor training
+kubectl get batchsandbox rl-training-batch -w
+```
+
+## Heterogeneous Training
+
+Train different agents or hyperparameters across sandboxes:
+
+```yaml heterogeneous-rl.yaml
+apiVersion: sandbox.opensandbox.io/v1alpha1
+kind: BatchSandbox
+metadata:
+  name: hyperparameter-search
+  namespace: opensandbox
+spec:
+  replicas: 4
+  poolRef: rl-training-pool
+  taskTemplate:
+    spec:
+      process:
+        command: ["python3"]
+        args: ["/workspace/train.py"]
+  shardTaskPatches:
+  - spec:
+      process:
+        env:
+        - name: LEARNING_RATE
+          value: "1e-3"
+        - name: RL_TIMESTEPS
+          value: "50000"
+  - spec:
+      process:
+        env:
+        - name: LEARNING_RATE
+          value: "1e-4"
+        - name: RL_TIMESTEPS
+          value: "50000"
+  - spec:
+      process:
+        env:
+        - name: LEARNING_RATE
+          value: "5e-4"
+        - name: RL_TIMESTEPS
+          value: "50000"
+  - spec:
+      process:
+        env:
+        - name: LEARNING_RATE
+          value: "1e-5"
+        - name: RL_TIMESTEPS
+          value: "50000"
+```
+
+## TensorBoard Integration
+
+Visualize training metrics with TensorBoard:
+
+```python tensorboard_example.py
+async def setup_tensorboard(sandbox: Sandbox) -> None:
+    # Training logs to runs/ directory
+    await sandbox.commands.run(
+        _with_python_env("python3 train.py")
+    )
+
+    # Start TensorBoard server
+    await sandbox.commands.run(
+        "nohup tensorboard --logdir runs --host 0.0.0.0 --port 6006 &",
+        background=True
+    )
+
+    print("TensorBoard available at http://<sandbox-ip>:6006")
+```
+
+<Tip>
+  Use Kubernetes port-forwarding to access TensorBoard:
+  ```bash
+  kubectl port-forward pod/<sandbox-pod> 6006:6006
+  ```
+  Then open http://localhost:6006
+</Tip>
+
+## Checkpoint Management
+
+Save and retrieve trained models:
+
+```python checkpoint_management.py
+async def save_checkpoint(sandbox: Sandbox, local_path: str) -> None:
+    # Read checkpoint from sandbox
+    checkpoint = await sandbox.files.read_file(
+        "checkpoints/cartpole_dqn.zip",
+        binary=True
+    )
+
+    # Save locally
+    with open(local_path, "wb") as f:
+        f.write(checkpoint)
+
+    print(f"Checkpoint saved to {local_path}")
+
+async def load_checkpoint(sandbox: Sandbox, local_path: str) -> None:
+    # Read local checkpoint
+    with open(local_path, "rb") as f:
+        checkpoint = f.read()
+
+    # Upload to sandbox
+    await sandbox.files.write_file(
+        "checkpoints/cartpole_dqn.zip",
+        checkpoint,
+        binary=True
+    )
+
+    print(f"Checkpoint loaded from {local_path}")
+```
+
+## Environment Variables
+
+| Variable | Description | Default |
+|----------|-------------|----------|
+| `SANDBOX_DOMAIN` | Sandbox service address | `localhost:8080` |
+| `SANDBOX_API_KEY` | API key for authentication | None |
+| `SANDBOX_IMAGE` | Docker image to use | `opensandbox/code-interpreter:v1.0.1` |
+| `RL_TIMESTEPS` | Training timesteps | `5000` |
+| `RL_TENSORBOARD_LOG` | TensorBoard log directory | `runs` |
+| `LEARNING_RATE` | Learning rate | `1e-3` |
+
+## Performance Tips
+
+<AccordionGroup>
+  <Accordion title="Optimize Training Speed">
+    - Use pooled sandboxes for faster startup
+    - Pre-install dependencies in custom images
+    - Increase `train_freq` and `gradient_steps` for faster learning
+    - Use GPU-enabled sandbox images for deep RL
+  </Accordion>
+
+  <Accordion title="Scale Parallel Training">
+    - Use BatchSandbox for 100+ parallel agents
+    - Set appropriate pool buffer sizes
+    - Monitor cluster resources and autoscale
+    - Use heterogeneous tasks for hyperparameter search
+  </Accordion>
+
+  <Accordion title="Manage Checkpoints">
+    - Save checkpoints periodically during training
+    - Use sandbox file system for intermediate results
+    - Download final checkpoints to persistent storage
+    - Implement checkpoint rotation for long training runs
+  </Accordion>
+
+  <Accordion title="Monitor Training">
+    - Use TensorBoard for real-time metrics
+    - Log training summaries to JSON files
+    - Track reward curves and loss values
+    - Set up alerts for failed training runs
+  </Accordion>
+</AccordionGroup>
+
+## Common Patterns
+
+### Population-Based Training
+
+```python pbt_example.py
+async def population_based_training(
+    population_size: int = 10,
+    generations: int = 5
+) -> None:
+    """Train a population of agents with evolutionary selection."""
+    for generation in range(generations):
+        # Create batch of sandboxes
+        batch = await create_batch_sandbox(
+            replicas=population_size,
+            task_patches=generate_hyperparameters()
+        )
+
+        # Wait for training completion
+        await wait_for_completion(batch)
+
+        # Evaluate and select best agents
+        results = await collect_results(batch)
+        best_agents = select_top_performers(results, top_k=5)
+
+        # Clean up batch
+        await delete_batch_sandbox(batch)
+```
+
+### Distributed PPO
+
+```python distributed_ppo.py
+async def distributed_ppo(
+    num_workers: int = 16,
+    timesteps_per_worker: int = 10000
+) -> None:
+    """Run distributed PPO with multiple worker sandboxes."""
+    # Create batch of worker sandboxes
+    workers = await create_batch_sandbox(
+        replicas=num_workers,
+        task_template={
+            "command": ["python3"],
+            "args": ["ppo_worker.py"],
+            "env": {"TIMESTEPS": str(timesteps_per_worker)}
+        }
+    )
+
+    # Collect experiences from all workers
+    experiences = await gather_worker_experiences(workers)
+
+    # Update policy
+    await update_policy(experiences)
+```
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="Dependency Installation Fails">
+    **Problem**: pip install fails inside sandbox
+
+    **Solution**:
+    - Use `--break-system-packages` flag
+    - Try alternative installation methods (apt, apk)
+    - Pre-build custom image with dependencies
+  </Accordion>
+
+  <Accordion title="Training Runs Out of Memory">
+    **Problem**: Sandbox crashes during training
+
+    **Solution**:
+    - Increase memory limits in pool spec
+    - Reduce buffer size or batch size
+    - Use smaller models or environments
+    - Monitor memory usage during training
+  </Accordion>
+
+  <Accordion title="Checkpoints Not Saved">
+    **Problem**: Cannot find checkpoint files
+
+    **Solution**:
+    - Verify checkpoint directory exists
+    - Check file permissions in sandbox
+    - Use absolute paths for checkpoint saving
+    - Read files before sandbox termination
+  </Accordion>
+</AccordionGroup>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Batch Sandboxes" icon="layer-group" href="/examples/batch-sandboxes">
+    Learn batch sandbox patterns
+  </Card>
+  <Card title="Kubernetes Deployment" icon="dharmachakra" href="/examples/kubernetes-deployment">
+    Deploy on Kubernetes
+  </Card>
+  <Card title="Python SDK" icon="python" href="/sdks/python">
+    Python SDK reference
+  </Card>
+  <Card title="API Reference" icon="code" href="/api-reference">
+    Complete API documentation
+  </Card>
+</CardGroup>

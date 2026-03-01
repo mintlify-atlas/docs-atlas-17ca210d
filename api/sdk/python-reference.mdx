@@ -1,0 +1,924 @@
+---
+title: Python SDK Reference
+description: Complete API reference for the OpenSandbox Python SDK
+---
+
+The OpenSandbox Python SDK provides secure, isolated execution environments with comprehensive file system access, command execution, and resource management capabilities.
+
+## Installation
+
+<CodeGroup>
+```bash pip
+pip install opensandbox
+```
+
+```bash uv
+uv add opensandbox
+```
+</CodeGroup>
+
+## Core Classes
+
+### Sandbox
+
+Main entrypoint for creating and managing sandbox instances.
+
+#### Class Methods
+
+##### create()
+
+Create a new sandbox instance with the specified configuration.
+
+```python
+from opensandbox import Sandbox
+from opensandbox.models.sandboxes import SandboxImageSpec, SandboxImageAuth
+from datetime import timedelta
+
+sandbox = await Sandbox.create(
+    "python:3.11",
+    timeout=timedelta(minutes=30),
+    env={"PYTHONPATH": "/workspace"},
+    resource={"cpu": "2", "memory": "4Gi"},
+)
+```
+
+<ParamField path="image" type="SandboxImageSpec | str" required>
+  Container image specification. Can be a string (e.g., `"python:3.11"`) or a `SandboxImageSpec` object with authentication.
+</ParamField>
+
+<ParamField path="timeout" type="timedelta" default="timedelta(minutes=10)">
+  Maximum sandbox lifetime before automatic termination.
+</ParamField>
+
+<ParamField path="ready_timeout" type="timedelta" default="timedelta(seconds=30)">
+  Maximum time to wait for sandbox to become ready.
+</ParamField>
+
+<ParamField path="env" type="dict[str, str] | None">
+  Environment variables for the sandbox.
+</ParamField>
+
+<ParamField path="metadata" type="dict[str, str] | None">
+  Custom metadata tags for the sandbox.
+</ParamField>
+
+<ParamField path="resource" type="dict[str, str] | None" default='{"cpu": "1", "memory": "2Gi"}'>
+  Resource limits (CPU, memory, etc.).
+</ParamField>
+
+<ParamField path="network_policy" type="NetworkPolicy | None">
+  Optional outbound network policy (egress).
+</ParamField>
+
+<ParamField path="extensions" type="dict[str, str] | None">
+  Opaque extension parameters passed through to the server.
+</ParamField>
+
+<ParamField path="entrypoint" type="list[str] | None" default='["tail", "-f", "/dev/null"]'>
+  Command to run as entrypoint.
+</ParamField>
+
+<ParamField path="volumes" type="list[Volume] | None">
+  Optional list of volume mounts for persistent storage.
+</ParamField>
+
+<ParamField path="connection_config" type="ConnectionConfig | None">
+  Connection configuration for API server.
+</ParamField>
+
+<ParamField path="health_check" type="Callable[[Sandbox], Awaitable[bool]] | None">
+  Custom async health check function.
+</ParamField>
+
+<ParamField path="health_check_polling_interval" type="timedelta" default="timedelta(milliseconds=200)">
+  Time between health check attempts.
+</ParamField>
+
+<ParamField path="skip_health_check" type="bool" default="False">
+  If True, do not wait for sandbox readiness/health.
+</ParamField>
+
+<ResponseField name="return" type="Sandbox">
+  Fully configured and ready Sandbox instance.
+</ResponseField>
+
+##### connect()
+
+Connect to an existing sandbox instance by ID.
+
+```python
+sandbox = await Sandbox.connect(
+    sandbox_id="existing-sandbox-id",
+    connection_config=config
+)
+```
+
+<ParamField path="sandbox_id" type="str" required>
+  ID of the existing sandbox.
+</ParamField>
+
+<ParamField path="connection_config" type="ConnectionConfig | None">
+  Connection configuration.
+</ParamField>
+
+<ParamField path="health_check" type="Callable[[Sandbox], Awaitable[bool]] | None">
+  Custom async health check function.
+</ParamField>
+
+<ParamField path="connect_timeout" type="timedelta" default="timedelta(seconds=30)">
+  Maximum time to wait for sandbox readiness/health after connecting.
+</ParamField>
+
+<ParamField path="health_check_polling_interval" type="timedelta" default="timedelta(milliseconds=200)">
+  Polling interval while waiting for readiness/health.
+</ParamField>
+
+<ParamField path="skip_health_check" type="bool" default="False">
+  If True, do not wait for readiness/health.
+</ParamField>
+
+<ResponseField name="return" type="Sandbox">
+  Connected Sandbox instance.
+</ResponseField>
+
+##### resume()
+
+Resume a paused sandbox by ID and return a new Sandbox instance.
+
+```python
+sandbox = await Sandbox.resume(
+    sandbox_id="paused-sandbox-id",
+    connection_config=config
+)
+```
+
+<ParamField path="sandbox_id" type="str" required>
+  ID of the paused sandbox to resume.
+</ParamField>
+
+<ParamField path="connection_config" type="ConnectionConfig | None">
+  Connection configuration.
+</ParamField>
+
+<ParamField path="health_check" type="Callable[[Sandbox], Awaitable[bool]] | None">
+  Optional custom async health check function.
+</ParamField>
+
+<ParamField path="resume_timeout" type="timedelta" default="timedelta(seconds=30)">
+  Maximum time to wait for sandbox readiness/health after resuming.
+</ParamField>
+
+<ParamField path="health_check_polling_interval" type="timedelta" default="timedelta(milliseconds=200)">
+  Polling interval while waiting for readiness/health.
+</ParamField>
+
+<ParamField path="skip_health_check" type="bool" default="False">
+  If True, do not wait for readiness/health.
+</ParamField>
+
+<ResponseField name="return" type="Sandbox">
+  Resumed Sandbox instance.
+</ResponseField>
+
+#### Instance Methods
+
+##### get_info()
+
+Get the current status of the sandbox.
+
+```python
+info = await sandbox.get_info()
+print(f"State: {info.status.state}")
+```
+
+<ResponseField name="return" type="SandboxInfo">
+  Current sandbox status including state and metadata.
+</ResponseField>
+
+##### get_endpoint()
+
+Get a specific network endpoint for the sandbox.
+
+```python
+endpoint = await sandbox.get_endpoint(80)
+print(f"Endpoint: {endpoint.endpoint}")
+```
+
+<ParamField path="port" type="int" required>
+  The port number to get the endpoint for.
+</ParamField>
+
+<ResponseField name="return" type="SandboxEndpoint">
+  Endpoint information including connection details.
+</ResponseField>
+
+##### get_metrics()
+
+Get the current resource usage metrics for the sandbox.
+
+```python
+metrics = await sandbox.get_metrics()
+print(f"Memory: {metrics.memory_used_in_mib}MB")
+```
+
+<ResponseField name="return" type="SandboxMetrics">
+  Current sandbox metrics including CPU, memory, and I/O statistics.
+</ResponseField>
+
+##### renew()
+
+Renew the sandbox expiration time to delay automatic termination.
+
+```python
+await sandbox.renew(timedelta(minutes=30))
+```
+
+<ParamField path="timeout" type="timedelta" required>
+  Duration to add to the current time to set the new expiration.
+</ParamField>
+
+<ResponseField name="return" type="SandboxRenewResponse">
+  Renew response including the new expiration time.
+</ResponseField>
+
+##### pause()
+
+Pause the sandbox while preserving its state.
+
+```python
+await sandbox.pause()
+```
+
+##### kill()
+
+Send a termination signal to the remote sandbox instance.
+
+```python
+await sandbox.kill()
+```
+
+##### close()
+
+Close local resources associated with the sandbox.
+
+```python
+await sandbox.close()
+```
+
+##### is_healthy()
+
+Check if the sandbox is healthy and responsive.
+
+```python
+healthy = await sandbox.is_healthy()
+```
+
+<ResponseField name="return" type="bool">
+  True if sandbox is healthy, False otherwise.
+</ResponseField>
+
+#### Properties
+
+##### files
+
+Provides access to file system operations within the sandbox.
+
+```python
+await sandbox.files.write_file("hello.txt", "Hello World")
+content = await sandbox.files.read_file("hello.txt")
+```
+
+<ResponseField name="type" type="Filesystem">
+  File system operations interface.
+</ResponseField>
+
+##### commands
+
+Provides access to command execution operations.
+
+```python
+result = await sandbox.commands.run("python script.py")
+print(result.logs.stdout[0].text)
+```
+
+<ResponseField name="type" type="Commands">
+  Command execution interface.
+</ResponseField>
+
+##### metrics
+
+Provides access to sandbox metrics and monitoring.
+
+```python
+metrics = await sandbox.metrics.get_metrics(sandbox.id)
+```
+
+<ResponseField name="type" type="Metrics">
+  Metrics and monitoring interface.
+</ResponseField>
+
+### SandboxManager
+
+Administrative interface for managing multiple sandbox instances.
+
+#### Class Methods
+
+##### create()
+
+Create a SandboxManager instance.
+
+```python
+from opensandbox import SandboxManager
+
+manager = await SandboxManager.create(connection_config=config)
+```
+
+<ParamField path="connection_config" type="ConnectionConfig | None">
+  Connection configuration for the manager.
+</ParamField>
+
+<ResponseField name="return" type="SandboxManager">
+  Configured sandbox manager instance.
+</ResponseField>
+
+#### Instance Methods
+
+##### list_sandbox_infos()
+
+List sandboxes with filtering options.
+
+```python
+from opensandbox.models.sandboxes import SandboxFilter
+
+sandboxes = await manager.list_sandbox_infos(
+    SandboxFilter(states=["RUNNING"], page_size=10)
+)
+```
+
+<ParamField path="filter" type="SandboxFilter" required>
+  Filter criteria for sandbox listing.
+</ParamField>
+
+<ResponseField name="return" type="PagedSandboxInfos">
+  Paged sandbox information matching the filter criteria.
+</ResponseField>
+
+##### get_sandbox_info()
+
+Get information for a single sandbox by ID.
+
+```python
+info = await manager.get_sandbox_info("sandbox-id")
+```
+
+<ParamField path="sandbox_id" type="str" required>
+  Sandbox ID to retrieve information for.
+</ParamField>
+
+<ResponseField name="return" type="SandboxInfo">
+  SandboxInfo for the specified sandbox.
+</ResponseField>
+
+##### kill_sandbox()
+
+Terminate a single sandbox.
+
+```python
+await manager.kill_sandbox("sandbox-id")
+```
+
+<ParamField path="sandbox_id" type="str" required>
+  Sandbox ID to terminate.
+</ParamField>
+
+##### renew_sandbox()
+
+Renew expiration time for a single sandbox.
+
+```python
+await manager.renew_sandbox("sandbox-id", timedelta(minutes=30))
+```
+
+<ParamField path="sandbox_id" type="str" required>
+  Sandbox ID to renew.
+</ParamField>
+
+<ParamField path="timeout" type="timedelta" required>
+  Duration to add to the current time to set the new expiration.
+</ParamField>
+
+<ResponseField name="return" type="SandboxRenewResponse">
+  Renew response including the new expiration time.
+</ResponseField>
+
+##### pause_sandbox()
+
+Pause a single sandbox while preserving its state.
+
+```python
+await manager.pause_sandbox("sandbox-id")
+```
+
+<ParamField path="sandbox_id" type="str" required>
+  Sandbox ID to pause.
+</ParamField>
+
+##### resume_sandbox()
+
+Resume a previously paused sandbox.
+
+```python
+await manager.resume_sandbox("sandbox-id")
+```
+
+<ParamField path="sandbox_id" type="str" required>
+  Sandbox ID to resume.
+</ParamField>
+
+##### close()
+
+Close local resources associated with the sandbox manager.
+
+```python
+await manager.close()
+```
+
+## Service Interfaces
+
+### Commands
+
+Command execution service for sandbox environments.
+
+#### run()
+
+Execute a shell command in the sandbox environment.
+
+```python
+from opensandbox.models.execd import RunCommandOpts, ExecutionHandlers
+
+# Simple execution
+result = await sandbox.commands.run("echo 'Hello World'")
+print(result.logs.stdout[0].text)
+
+# With handlers
+handlers = ExecutionHandlers(
+    on_stdout=lambda msg: print(f"STDOUT: {msg.text}"),
+    on_stderr=lambda msg: print(f"STDERR: {msg.text}"),
+)
+result = await sandbox.commands.run(
+    "python script.py",
+    opts=RunCommandOpts(background=False),
+    handlers=handlers
+)
+```
+
+<ParamField path="command" type="str" required>
+  Shell command text to execute.
+</ParamField>
+
+<ParamField path="opts" type="RunCommandOpts | None">
+  Command execution options (e.g., background, working_directory).
+</ParamField>
+
+<ParamField path="handlers" type="ExecutionHandlers | None">
+  Optional async handlers for streaming events (stdout/stderr/result/init/complete/error).
+</ParamField>
+
+<ResponseField name="return" type="Execution">
+  An Execution handle representing the running command instance.
+</ResponseField>
+
+#### interrupt()
+
+Interrupt and terminate a running command execution.
+
+```python
+await sandbox.commands.interrupt("execution-id")
+```
+
+<ParamField path="execution_id" type="str" required>
+  Unique identifier of the execution to interrupt.
+</ParamField>
+
+#### get_command_status()
+
+Get the current running status for a command.
+
+```python
+status = await sandbox.commands.get_command_status("execution-id")
+```
+
+<ParamField path="execution_id" type="str" required>
+  Unique identifier of the execution to query.
+</ParamField>
+
+<ResponseField name="return" type="CommandStatus">
+  CommandStatus describing running state and exit code if available.
+</ResponseField>
+
+#### get_background_command_logs()
+
+Get background command logs (non-streamed).
+
+```python
+logs = await sandbox.commands.get_background_command_logs("execution-id", cursor=0)
+```
+
+<ParamField path="execution_id" type="str" required>
+  Unique identifier of the execution to query.
+</ParamField>
+
+<ParamField path="cursor" type="int | None">
+  Optional line cursor for incremental reads.
+</ParamField>
+
+<ResponseField name="return" type="CommandLogs">
+  CommandLogs containing raw output and latest cursor.
+</ResponseField>
+
+### Filesystem
+
+Filesystem operations service for sandbox environments.
+
+#### read_file()
+
+Read the content of a file as a string.
+
+```python
+content = await sandbox.files.read_file("/tmp/hello.txt")
+print(content)
+```
+
+<ParamField path="path" type="str" required>
+  The absolute or relative path to the file to read.
+</ParamField>
+
+<ParamField path="encoding" type="str" default="utf-8">
+  Character encoding for the file content.
+</ParamField>
+
+<ParamField path="range_header" type="str | None">
+  HTTP byte range to read (e.g., "bytes=0-1023").
+</ParamField>
+
+<ResponseField name="return" type="str">
+  The file content as a string.
+</ResponseField>
+
+#### read_bytes()
+
+Read the content of a file as bytes.
+
+```python
+content = await sandbox.files.read_bytes("/tmp/image.png")
+```
+
+<ParamField path="path" type="str" required>
+  The absolute or relative path to the file to read.
+</ParamField>
+
+<ParamField path="range_header" type="str | None">
+  HTTP byte range to read (e.g., "bytes=0-1023").
+</ParamField>
+
+<ResponseField name="return" type="bytes">
+  The file content as bytes.
+</ResponseField>
+
+#### read_bytes_stream()
+
+Stream file content as bytes chunks.
+
+```python
+async for chunk in sandbox.files.read_bytes_stream("/tmp/large-file.bin"):
+    process(chunk)
+```
+
+<ParamField path="path" type="str" required>
+  The absolute or relative path to the file to read.
+</ParamField>
+
+<ParamField path="chunk_size" type="int" default="65536">
+  Size of each chunk in bytes.
+</ParamField>
+
+<ParamField path="range_header" type="str | None">
+  HTTP byte range to read (e.g., "bytes=0-1023").
+</ParamField>
+
+<ResponseField name="return" type="AsyncIterator[bytes]">
+  Async iterator yielding bytes chunks.
+</ResponseField>
+
+#### write_files()
+
+Write content to files based on the provided write entries.
+
+```python
+from opensandbox.models.filesystem import WriteEntry
+
+await sandbox.files.write_files([
+    WriteEntry(path="/tmp/hello.txt", data="Hello World", mode=644)
+])
+```
+
+<ParamField path="entries" type="list[WriteEntry]" required>
+  List of WriteEntry objects specifying files to write and their content.
+</ParamField>
+
+#### write_file()
+
+Write content to a single file (convenience method).
+
+```python
+await sandbox.files.write_file("/tmp/hello.txt", "Hello World")
+```
+
+<ParamField path="path" type="str" required>
+  Destination file path.
+</ParamField>
+
+<ParamField path="data" type="str | bytes | IOBase" required>
+  Content to write.
+</ParamField>
+
+<ParamField path="encoding" type="str" default="utf-8">
+  Character encoding.
+</ParamField>
+
+<ParamField path="mode" type="int" default="755">
+  Unix file permissions.
+</ParamField>
+
+<ParamField path="owner" type="str | None">
+  Owner username.
+</ParamField>
+
+<ParamField path="group" type="str | None">
+  Group name.
+</ParamField>
+
+#### create_directories()
+
+Create directories based on the provided entries.
+
+```python
+from opensandbox.models.filesystem import WriteEntry
+
+await sandbox.files.create_directories([
+    WriteEntry(path="/tmp/mydir", mode=755)
+])
+```
+
+<ParamField path="entries" type="list[WriteEntry]" required>
+  List of WriteEntry objects specifying directories to create.
+</ParamField>
+
+#### delete_files()
+
+Delete the specified files.
+
+```python
+await sandbox.files.delete_files(["/tmp/hello.txt"])
+```
+
+<ParamField path="paths" type="list[str]" required>
+  List of file paths to delete.
+</ParamField>
+
+#### delete_directories()
+
+Delete the specified directories.
+
+```python
+await sandbox.files.delete_directories(["/tmp/mydir"])
+```
+
+<ParamField path="paths" type="list[str]" required>
+  List of directory paths to delete.
+</ParamField>
+
+#### move_files()
+
+Move files from source to destination paths.
+
+```python
+from opensandbox.models.filesystem import MoveEntry
+
+await sandbox.files.move_files([
+    MoveEntry(source="/tmp/old.txt", destination="/tmp/new.txt")
+])
+```
+
+<ParamField path="entries" type="list[MoveEntry]" required>
+  List of MoveEntry objects specifying source and destination paths.
+</ParamField>
+
+#### set_permissions()
+
+Set file system permissions for the specified entries.
+
+```python
+from opensandbox.models.filesystem import SetPermissionEntry
+
+await sandbox.files.set_permissions([
+    SetPermissionEntry(path="/tmp/script.sh", mode=755)
+])
+```
+
+<ParamField path="entries" type="list[SetPermissionEntry]" required>
+  List of SetPermissionEntry objects specifying files and their new permissions.
+</ParamField>
+
+#### replace_contents()
+
+Replace content in files based on search and replace patterns.
+
+```python
+from opensandbox.models.filesystem import ContentReplaceEntry
+
+await sandbox.files.replace_contents([
+    ContentReplaceEntry(
+        path="/tmp/config.txt",
+        search="old_value",
+        replace="new_value"
+    )
+])
+```
+
+<ParamField path="entries" type="list[ContentReplaceEntry]" required>
+  List of ContentReplaceEntry objects specifying replacement operations.
+</ParamField>
+
+#### search()
+
+Search for files and directories based on the specified criteria.
+
+```python
+from opensandbox.models.filesystem import SearchEntry
+
+files = await sandbox.files.search(
+    SearchEntry(path="/tmp", pattern="*.txt")
+)
+for f in files:
+    print(f.path)
+```
+
+<ParamField path="entry" type="SearchEntry" required>
+  SearchEntry object containing search parameters and criteria.
+</ParamField>
+
+<ResponseField name="return" type="list[EntryInfo]">
+  List of EntryInfo objects containing metadata for matching files/directories.
+</ResponseField>
+
+#### get_file_info()
+
+Retrieve file information for the specified paths.
+
+```python
+info_map = await sandbox.files.get_file_info(["/tmp/hello.txt"])
+for path, info in info_map.items():
+    print(f"{path}: {info.size} bytes")
+```
+
+<ParamField path="paths" type="list[str]" required>
+  List of file/directory paths to get information for.
+</ParamField>
+
+<ResponseField name="return" type="dict[str, EntryInfo]">
+  Map where keys are file paths and values are EntryInfo objects.
+</ResponseField>
+
+## Configuration
+
+### ConnectionConfig
+
+Connection configuration for API server communication.
+
+```python
+from opensandbox.config import ConnectionConfig
+from datetime import timedelta
+
+config = ConnectionConfig(
+    api_key="your-api-key",
+    domain="api.opensandbox.io",
+    request_timeout=timedelta(seconds=60)
+)
+```
+
+<ParamField path="api_key" type="str">
+  API Key for authentication (can also be set via `OPEN_SANDBOX_API_KEY` environment variable).
+</ParamField>
+
+<ParamField path="domain" type="str">
+  The endpoint domain of the sandbox service (can also be set via `OPEN_SANDBOX_DOMAIN` environment variable).
+</ParamField>
+
+<ParamField path="protocol" type="str" default="http">
+  HTTP protocol (http/https).
+</ParamField>
+
+<ParamField path="request_timeout" type="timedelta" default="timedelta(seconds=30)">
+  Timeout for API requests.
+</ParamField>
+
+<ParamField path="debug" type="bool" default="False">
+  Enable debug logging for HTTP requests.
+</ParamField>
+
+<ParamField path="headers" type="dict[str, str] | None">
+  Custom HTTP headers.
+</ParamField>
+
+<ParamField path="transport" type="httpx.AsyncHTTPTransport | None">
+  Shared httpx transport (pool/proxy/retry).
+</ParamField>
+
+<ParamField path="use_server_proxy" type="bool" default="False">
+  Use sandbox server as proxy for execd/endpoint requests.
+</ParamField>
+
+## Synchronous API
+
+The SDK also provides synchronous versions of the main classes:
+
+```python
+from opensandbox import SandboxSync, SandboxManagerSync
+from opensandbox.config import ConnectionConfigSync
+
+config = ConnectionConfigSync(
+    domain="api.opensandbox.io",
+    api_key="your-api-key"
+)
+
+sandbox = SandboxSync.create("ubuntu", connection_config=config)
+with sandbox:
+    execution = sandbox.commands.run("echo 'Hello Sandbox!'")
+    print(execution.logs.stdout[0].text)
+    sandbox.kill()
+```
+
+All async methods have synchronous equivalents in the `SandboxSync`, `SandboxManagerSync`, and `ConnectionConfigSync` classes.
+
+## Exception Handling
+
+The SDK raises `SandboxException` and its subclasses for various error conditions:
+
+```python
+from opensandbox.exceptions import (
+    SandboxException,
+    SandboxReadyTimeoutException,
+    InvalidArgumentException,
+)
+
+try:
+    sandbox = await Sandbox.create("python:3.11")
+except SandboxReadyTimeoutException:
+    print("Sandbox did not become ready in time")
+except SandboxException as e:
+    print(f"Sandbox error: [{e.error.code}] {e.error.message}")
+```
+
+## Complete Example
+
+```python
+import asyncio
+from opensandbox import Sandbox
+from opensandbox.config import ConnectionConfig
+from opensandbox.models.execd import ExecutionHandlers
+from datetime import timedelta
+
+async def main():
+    config = ConnectionConfig(
+        domain="api.opensandbox.io",
+        api_key="your-api-key"
+    )
+
+    async with await Sandbox.create(
+        "python:3.11",
+        timeout=timedelta(minutes=30),
+        connection_config=config
+    ) as sandbox:
+        # Write a file
+        await sandbox.files.write_file("script.py", "print('Hello World')")
+
+        # Execute command with streaming
+        handlers = ExecutionHandlers(
+            on_stdout=lambda msg: print(f"Output: {msg.text}")
+        )
+        result = await sandbox.commands.run(
+            "python script.py",
+            handlers=handlers
+        )
+
+        # Get metrics
+        metrics = await sandbox.get_metrics()
+        print(f"Memory: {metrics.memory_used_in_mib}MB")
+
+        # Cleanup
+        await sandbox.kill()
+
+if __name__ == "__main__":
+    asyncio.run(main())
+```

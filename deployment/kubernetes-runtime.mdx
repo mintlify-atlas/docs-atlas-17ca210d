@@ -1,0 +1,419 @@
+---
+title: Kubernetes Runtime Deployment
+description: Deploy OpenSandbox with Kubernetes operator for scalable sandbox management
+---
+
+The Kubernetes runtime provides automated sandbox lifecycle management, resource pooling for fast provisioning, batch sandbox creation, and optional task orchestration in Kubernetes clusters.
+
+## Overview
+
+The OpenSandbox Kubernetes Controller is a Kubernetes operator that manages sandbox environments through custom resources. It offers:
+
+- **Flexible Sandbox Creation**: Pooled and non-pooled modes
+- **Batch and Individual Delivery**: Single sandboxes or high-throughput batches
+- **Resource Pooling**: Pre-warmed resource pools for rapid provisioning
+- **Optional Task Scheduling**: Integrated task orchestration with customizable templates
+- **Comprehensive Monitoring**: Real-time status tracking
+
+## Prerequisites
+
+- **Kubernetes cluster** v1.22.4 or higher
+- **kubectl** v1.11.3 or higher
+- **Go** v1.24.0+ (for building from source)
+- **Docker** v17.03+ (for building images)
+- Access to a container registry
+
+### Optional: Local Kubernetes with kind
+
+For testing purposes, use [kind](https://kind.sigs.k8s.io/) to create a local cluster:
+
+```bash
+# Install kind
+brew install kind  # macOS
+winget install Kubernetes.kind  # Windows
+
+# Create cluster
+kind create cluster
+
+# Delete when done
+kind delete cluster
+```
+
+## Deployment
+
+<Steps>
+  <Step title="Build and Push Images">
+    Build both the controller and task-executor images:
+    
+    ```bash
+    # Build and push controller image
+    make docker-build docker-push \
+      IMG=<registry>/opensandbox-controller:tag
+    
+    # Build and push task-executor image
+    make docker-build-task-executor docker-push-task-executor \
+      TASK_EXECUTOR_IMG=<registry>/opensandbox-task-executor:tag
+    ```
+    
+    **For kind users**: Load images into the cluster:
+    
+    ```bash
+    kind load docker-image <registry>/opensandbox-controller:tag
+    kind load docker-image <registry>/opensandbox-task-executor:tag
+    ```
+  </Step>
+
+  <Step title="Install CRDs">
+    Install the Custom Resource Definitions:
+    
+    ```bash
+    make install
+    ```
+    
+    This creates the `BatchSandbox` and `Pool` custom resources.
+  </Step>
+
+  <Step title="Deploy the Operator">
+    Deploy the controller manager to your cluster:
+    
+    ```bash
+    make deploy \
+      IMG=<registry>/opensandbox-controller:tag \
+      TASK_EXECUTOR_IMG=<registry>/opensandbox-task-executor:tag
+    ```
+    
+    You may need cluster-admin privileges for this step.
+  </Step>
+
+  <Step title="Configure OpenSandbox Server">
+    Generate a Kubernetes configuration file for the server:
+    
+    ```bash
+    opensandbox-server init-config ~/.sandbox.toml --example k8s
+    ```
+    
+    Edit `~/.sandbox.toml` with your cluster settings (see below).
+  </Step>
+
+  <Step title="Start the Server">
+    Launch the OpenSandbox server:
+    
+    ```bash
+    opensandbox-server
+    ```
+  </Step>
+</Steps>
+
+## Server Configuration
+
+Configure the OpenSandbox server to use the Kubernetes runtime:
+
+```toml
+[server]
+host = "0.0.0.0"
+port = 8080
+log_level = "INFO"
+api_key = "your-secret-api-key-change-this"
+
+[runtime]
+type = "kubernetes"
+execd_image = "opensandbox/execd:v1.0.6"
+
+[kubernetes]
+# Path to kubeconfig (null for in-cluster config)
+kubeconfig_path = "~/.kube/config"
+
+# Namespace for sandbox workloads
+namespace = "opensandbox"
+
+# Workload provider (batchsandbox or agent-sandbox)
+workload_provider = "batchsandbox"
+
+# BatchSandbox template file path
+batchsandbox_template_file = "~/batchsandbox-template.yaml"
+
+# Beta: Enable informer-backed cache to reduce API calls
+informer_enabled = true
+informer_resync_seconds = 300
+informer_watch_timeout_seconds = 60
+
+[ingress]
+mode = "direct"
+```
+
+### Configuration Options
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `kubeconfig_path` | string | `null` | Path to kubeconfig file. Use `null` for in-cluster configuration |
+| `namespace` | string | `"opensandbox"` | Kubernetes namespace for sandbox workloads |
+| `workload_provider` | string | `"batchsandbox"` | Workload provider type (`batchsandbox` or `agent-sandbox`) |
+| `informer_enabled` | boolean | `true` | Enable watch-based cache (beta) |
+| `informer_resync_seconds` | integer | `300` | Full list refresh interval (beta) |
+| `informer_watch_timeout_seconds` | integer | `60` | Watch restart interval (beta) |
+
+### Informer Settings (Beta)
+
+The informer is enabled by default to reduce API calls:
+
+- Set `informer_enabled = false` to disable
+- Tune `resync` and `watch_timeout` for your cluster's API limits
+- Provides watch-based caching for better performance
+
+## Creating Sandbox Resources
+
+### Basic Non-Pooled Sandbox
+
+Create a simple sandbox without resource pooling:
+
+```yaml
+apiVersion: sandbox.opensandbox.io/v1alpha1
+kind: BatchSandbox
+metadata:
+  name: basic-batch-sandbox
+spec:
+  replicas: 2
+  template:
+    spec:
+      containers:
+      - name: sandbox-container
+        image: nginx:latest
+        ports:
+        - containerPort: 80
+```
+
+Apply and check status:
+
+```bash
+kubectl apply -f basic-batch-sandbox.yaml
+kubectl get batchsandbox basic-batch-sandbox -o wide
+```
+
+Example output:
+
+```
+NAME                   DESIRED   TOTAL   ALLOCATED   READY   EXPIRE   AGE
+basic-batch-sandbox    2         2       2           2       <none>   5m
+```
+
+### Resource Pool Configuration
+
+Create a pool of pre-warmed resources:
+
+```yaml
+apiVersion: sandbox.opensandbox.io/v1alpha1
+kind: Pool
+metadata:
+  name: example-pool
+spec:
+  template:
+    spec:
+      containers:
+      - name: sandbox-container
+        image: nginx:latest
+        ports:
+        - containerPort: 80
+  capacitySpec:
+    bufferMax: 10      # Maximum buffer size
+    bufferMin: 2       # Minimum buffer size
+    poolMax: 20        # Pool capacity limit
+    poolMin: 5         # Minimum pool size
+```
+
+Apply the pool:
+
+```bash
+kubectl apply -f pool-example.yaml
+```
+
+### Pooled Sandbox
+
+Create sandboxes using a resource pool:
+
+```yaml
+apiVersion: sandbox.opensandbox.io/v1alpha1
+kind: BatchSandbox
+metadata:
+  name: pooled-batch-sandbox
+spec:
+  replicas: 3
+  poolRef: example-pool  # Reference to pool
+```
+
+```bash
+kubectl apply -f pooled-batch-sandbox.yaml
+```
+
+### Sandbox with Heterogeneous Tasks
+
+Create sandboxes with process-based task execution:
+
+**Pool with Task Executor Sidecar:**
+
+```yaml
+apiVersion: sandbox.opensandbox.io/v1alpha1
+kind: Pool
+metadata:
+  name: task-example-pool
+spec:
+  template:
+    spec:
+      shareProcessNamespace: true  # Required for task execution
+      containers:
+      - name: sandbox-container
+        image: ubuntu:latest
+        command: ["sleep", "3600"]
+      - name: task-executor
+        image: <registry>/opensandbox-task-executor:tag
+        securityContext:
+          capabilities:
+            add: ["SYS_PTRACE"]  # Required for process injection
+  capacitySpec:
+    bufferMax: 10
+    bufferMin: 2
+    poolMax: 20
+    poolMin: 5
+```
+
+**BatchSandbox with Task Templates:**
+
+```yaml
+apiVersion: sandbox.opensandbox.io/v1alpha1
+kind: BatchSandbox
+metadata:
+  name: task-batch-sandbox
+spec:
+  replicas: 2
+  poolRef: task-example-pool
+  taskTemplate:
+    spec:
+      process:
+        command: ["echo", "Default task"]
+  shardTaskPatches:
+  - spec:
+      process:
+        command: ["echo", "Custom task for sandbox 1"]
+  - spec:
+      process:
+        command: ["echo", "Custom task for sandbox 2"]
+        args: ["with", "additional", "arguments"]
+```
+
+```bash
+kubectl apply -f task-batch-sandbox.yaml
+```
+
+**Check Task Status:**
+
+```bash
+kubectl get batchsandbox task-batch-sandbox -o wide
+```
+
+Output includes task metrics:
+
+```
+NAME                 DESIRED TOTAL ALLOCATED READY TASK_RUNNING TASK_SUCCEED TASK_FAILED EXPIRE AGE
+task-batch-sandbox   2       2     2         2     0            2            0           <none> 5m
+```
+
+## Monitoring Resources
+
+View pool and sandbox status:
+
+```bash
+# View all pools
+kubectl get pools
+
+# View all batch sandboxes
+kubectl get batchsandboxes
+
+# Detailed information
+kubectl describe pool example-pool
+kubectl describe batchsandbox example-batch-sandbox
+
+# Get endpoint information
+kubectl get batchsandbox basic-batch-sandbox \
+  -o jsonpath='{.metadata.annotations.sandbox\.opensandbox\.io/endpoints}'
+```
+
+## Performance Characteristics
+
+### Batch Delivery Performance
+
+BatchSandbox provides O(1) time complexity for batch delivery:
+
+**Test Environment:**
+- Controller: 12C32G request, 16C64G limit
+- BatchSandbox controller concurrency: 32
+- Pool: busybox:latest with 0.1C256MB
+
+**100 Sandboxes Delivery Time:**
+
+| Implementation | Time (seconds) |
+|----------------|----------------|
+| SIG Agent-Sandbox (concurrency=1) | 76.35 |
+| SIG Agent-Sandbox (concurrency=10) | 23.17 |
+| SIG Agent-Sandbox (concurrency=50) | 33.85 |
+| **BatchSandbox** | **0.92** |
+
+### Write Operations Comparison
+
+**BatchSandbox**: Fixed operations regardless of scale
+1. Create BatchSandbox
+2. Update annotation (batch allocation)
+3. Update status
+
+**Traditional**: Operations scale with N sandboxes
+1. Create N SandboxClaim objects
+2. Create N Sandbox objects
+3. Update N Pods
+4. Update N Sandbox statuses
+5. Update N SandboxClaim statuses
+
+## Relationship with agent-sandbox
+
+BatchSandbox complements [kubernetes-sigs/agent-sandbox](https://github.com/kubernetes-sigs/agent-sandbox) with:
+
+1. **Batch Sandbox Semantics**: Significantly higher throughput for RL training scenarios
+2. **Task Scheduling**: Enables customized sandbox delivery (e.g., process injection)
+
+Choose the appropriate runtime based on your use case:
+
+- **agent-sandbox**: Traditional single-sandbox workflows
+- **BatchSandbox**: High-throughput batch scenarios, RL training, custom task orchestration
+
+## Cleanup
+
+Delete batch sandboxes:
+
+```bash
+kubectl delete batchsandbox task-batch-sandbox
+```
+
+The controller stops all running tasks before deletion and returns resources to the pool.
+
+## Troubleshooting
+
+### Sandboxes Not Starting
+
+- Check operator logs: `kubectl logs -n opensandbox-system deployment/opensandbox-controller-manager`
+- Verify CRDs are installed: `kubectl get crds | grep sandbox`
+- Check resource quotas and limits
+
+### Task Execution Failures
+
+- Ensure `shareProcessNamespace: true` in pool template
+- Verify task-executor has `SYS_PTRACE` capability
+- Check task-executor container logs
+
+### Performance Issues
+
+- Increase controller concurrency in deployment
+- Tune informer settings for your cluster
+- Review pool buffer settings
+
+## Next Steps
+
+- [Configure server settings](/deployment/configuration)
+- [Review security best practices](/deployment/security)
+- [Explore API documentation](/api-reference/create-sandbox)

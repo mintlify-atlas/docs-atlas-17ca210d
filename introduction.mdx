@@ -1,0 +1,74 @@
+---
+title: Introduction
+description: OpenSandbox is a general-purpose sandbox platform for AI applications, offering multi-language SDKs, unified sandbox APIs, and Docker/Kubernetes runtimes.
+---
+
+<img src="/images/logo.svg" alt="OpenSandbox" width="150" />
+
+# Welcome to OpenSandbox
+
+OpenSandbox is a **general-purpose sandbox platform** for AI applications, offering multi-language SDKs, unified sandbox APIs, and Docker/Kubernetes runtimes for scenarios like Coding Agents, GUI Agents, Agent Evaluation, AI Code Execution, and RL Training.
+
+## Key Features
+
+<CardGroup cols={2}>
+  <Card title="Multi-language SDKs" icon="code">
+    Provides sandbox SDKs in Python, Java/Kotlin, JavaScript/TypeScript, C#/.NET, and more. Build with your preferred language.
+  </Card>
+  
+  <Card title="Sandbox Protocol" icon="network-wired">
+    Defines sandbox lifecycle management APIs and sandbox execution APIs so you can extend custom sandbox runtimes.
+  </Card>
+  
+  <Card title="Flexible Runtime" icon="server">
+    Built-in lifecycle management supporting Docker and high-performance Kubernetes runtime, enabling both local runs and large-scale distributed scheduling.
+  </Card>
+  
+  <Card title="Rich Environments" icon="terminal">
+    Built-in Command, Filesystem, and Code Interpreter implementations. Examples cover Coding Agents, browser automation (Chrome, Playwright), and desktop environments (VNC, VS Code).
+  </Card>
+  
+  <Card title="Network Policy" icon="shield-halved">
+    Unified Ingress Gateway with multiple routing strategies plus per-sandbox egress controls for secure network isolation.
+  </Card>
+  
+  <Card title="Production Ready" icon="check-circle">
+    Automatic expiration with TTL renewal, API key authentication, resource quotas, and structured observability.
+  </Card>
+</CardGroup>
+
+## Use Cases
+
+OpenSandbox is designed for a wide range of AI and automation scenarios:
+
+- **Coding Agents**: Run Claude Code, Gemini CLI, OpenAI Codex, and other coding assistants in isolated environments
+- **GUI Agents**: Browser automation with Chrome and Playwright for web scraping and testing
+- **Agent Evaluation**: Standardized sandbox environments for testing and benchmarking AI agents
+- **Code Execution**: Safe execution of user-generated code with resource limits and network controls
+- **RL Training**: Reinforcement learning training environments with checkpoint management
+- **Desktop Environments**: Full desktop with VNC access or VS Code Web for remote development
+
+## Architecture Overview
+
+OpenSandbox consists of several key components:
+
+- **Sandbox Server**: FastAPI-based control plane for managing sandbox lifecycles
+- **Multi-language SDKs**: Client libraries for Python, Java/Kotlin, TypeScript/JavaScript, C#/.NET
+- **Execution Daemon (execd)**: In-sandbox agent for command execution and file operations
+- **Runtime Providers**: Docker and Kubernetes backend implementations
+- **Network Components**: Ingress gateway for routing and egress controls for network policy
+
+## Getting Started
+
+Ready to create your first sandbox? Follow our quickstart guide to get up and running in minutes.
+
+<Card title="Quickstart Guide" icon="rocket" href="/quickstart">
+  Create and run your first sandbox with step-by-step instructions
+</Card>
+
+## Community and Support
+
+- **GitHub**: [alibaba/OpenSandbox](https://github.com/alibaba/OpenSandbox)
+- **License**: Apache 2.0
+- **Issues**: Report bugs and request features via GitHub Issues
+- **Discussions**: Join the community for Q&A and ideas

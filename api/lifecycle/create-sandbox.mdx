@@ -1,0 +1,377 @@
+---
+title: "Create Sandbox"
+api: "POST /v1/sandboxes"
+description: "Create a new sandbox from a container image"
+---
+
+Creates a new sandbox from a container image with optional resource limits, environment variables, and metadata. Sandboxes are provisioned directly from the specified image without requiring a pre-created template.
+
+## Authentication
+
+API Key authentication is required via the `OPEN-SANDBOX-API-KEY` header.
+
+## Request Body
+
+<ParamField body="image" type="object" required>
+  Container image specification for the sandbox
+  
+  <Expandable title="properties">
+    <ParamField body="uri" type="string" required>
+      Container image URI in standard format.
+      
+      Examples:
+      - `"python:3.11"` (Docker Hub)
+      - `"ubuntu:22.04"`
+      - `"gcr.io/my-project/model-server:v1.0"`
+      - `"private-registry.company.com:5000/app:latest"`
+    </ParamField>
+    
+    <ParamField body="auth" type="object">
+      Registry authentication credentials (required for private registries)
+      
+      <Expandable title="properties">
+        <ParamField body="username" type="string">
+          Registry username or service account
+        </ParamField>
+        
+        <ParamField body="password" type="string">
+          Registry password or authentication token
+        </ParamField>
+      </Expandable>
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+<ParamField body="timeout" type="integer" required>
+  Sandbox timeout in seconds. The sandbox will automatically terminate after this duration.
+  
+  - Minimum: 60
+  - Maximum: 86400
+  
+  SDK clients should provide a default value (e.g., 3600 seconds / 1 hour).
+</ParamField>
+
+<ParamField body="resourceLimits" type="object" required>
+  Runtime resource constraints for the sandbox instance. Similar to Kubernetes resource specifications.
+  
+  SDK clients should provide sensible defaults (e.g., `cpu: "500m"`, `memory: "512Mi"`).
+  
+  Common resource types:
+  - `cpu`: CPU allocation in millicores (e.g., "250m" for 0.25 CPU cores)
+  - `memory`: Memory allocation in bytes or human-readable format (e.g., "512Mi", "1Gi")
+  - `gpu`: Number of GPU devices (e.g., "1")
+  
+  Example:
+  ```json
+  {
+    "cpu": "500m",
+    "memory": "512Mi",
+    "gpu": "1"
+  }
+  ```
+</ParamField>
+
+<ParamField body="entrypoint" type="array" required>
+  The command to execute as the sandbox's entry process (required).
+  
+  Explicitly specifies the user's expected main process, allowing the sandbox management service to reliably inject control processes before executing this command.
+  
+  Format: `[executable, arg1, arg2, ...]`
+  
+  Examples:
+  - `["python", "/app/main.py"]`
+  - `["/bin/bash"]`
+  - `["java", "-jar", "/app/app.jar"]`
+  - `["node", "server.js"]`
+</ParamField>
+
+<ParamField body="env" type="object">
+  Environment variables to inject into the sandbox runtime.
+  
+  Example:
+  ```json
+  {
+    "API_KEY": "secret-key",
+    "DEBUG": "true",
+    "LOG_LEVEL": "info"
+  }
+  ```
+</ParamField>
+
+<ParamField body="metadata" type="object">
+  Custom key-value metadata for management, filtering, and tagging.
+  
+  Use "name" key for a human-readable identifier.
+  
+  Example:
+  ```json
+  {
+    "name": "Data Processing Sandbox",
+    "project": "data-processing",
+    "team": "ml",
+    "environment": "staging"
+  }
+  ```
+</ParamField>
+
+<ParamField body="networkPolicy" type="object">
+  Optional outbound network policy for the sandbox. If omitted or empty, the sidecar starts in allow-all mode until updated.
+  
+  <Expandable title="properties">
+    <ParamField body="defaultAction" type="string">
+      Default action when no egress rule matches. Defaults to "deny".
+      
+      Values: `allow`, `deny`
+    </ParamField>
+    
+    <ParamField body="egress" type="array">
+      List of egress rules evaluated in order.
+      
+      <Expandable title="rule properties">
+        <ParamField body="action" type="string" required>
+          Whether to allow or deny matching targets.
+          
+          Values: `allow`, `deny`
+        </ParamField>
+        
+        <ParamField body="target" type="string" required>
+          FQDN or wildcard domain (e.g., "example.com", "*.example.com").
+          
+          IP/CIDR not yet supported in the egress MVP.
+        </ParamField>
+      </Expandable>
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+<ParamField body="volumes" type="array">
+  Storage mounts for the sandbox. Each volume entry specifies a named backend-specific storage source and common mount settings.
+  
+  <Expandable title="volume properties">
+    <ParamField body="name" type="string" required>
+      Unique identifier for the volume within the sandbox.
+      
+      Must be a valid DNS label (lowercase alphanumeric, hyphens allowed, max 63 chars).
+    </ParamField>
+    
+    <ParamField body="mountPath" type="string" required>
+      Absolute path inside the container where the volume is mounted.
+      
+      Must start with '/'.
+    </ParamField>
+    
+    <ParamField body="readOnly" type="boolean">
+      If true, the volume is mounted as read-only. Defaults to false (read-write).
+    </ParamField>
+    
+    <ParamField body="subPath" type="string">
+      Optional subdirectory under the backend path to mount.
+      
+      Must be a relative path without '..' components.
+    </ParamField>
+    
+    <ParamField body="host" type="object">
+      Host path bind mount backend. Maps a directory on the host filesystem into the container.
+      
+      <Expandable title="properties">
+        <ParamField body="path" type="string" required>
+          Absolute path on the host filesystem to mount.
+          
+          Must start with '/' and be under an allowed prefix.
+        </ParamField>
+      </Expandable>
+    </ParamField>
+    
+    <ParamField body="pvc" type="object">
+      Platform-managed named volume backend.
+      
+      <Expandable title="properties">
+        <ParamField body="claimName" type="string" required>
+          Name of the volume on the target platform.
+          
+          In Kubernetes this is the PVC name; in Docker this is the named volume name.
+        </ParamField>
+      </Expandable>
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+<ParamField body="extensions" type="object">
+  Opaque container for provider-specific or transient parameters not supported by the core API.
+  
+  <Note>
+  This field is reserved for internal features, experimental flags, or temporary behaviors. Standard parameters should be proposed as core API fields.
+  </Note>
+  
+  **Best Practices**:
+  - **Namespacing**: Use prefixed keys (e.g., `storage.id`) to prevent collisions.
+  - **Pass-through**: SDKs and middleware must treat this object as opaque and pass it through transparently.
+</ParamField>
+
+## Response
+
+<ResponseField name="id" type="string">
+  Unique sandbox identifier
+</ResponseField>
+
+<ResponseField name="status" type="object">
+  Current lifecycle status and detailed state information
+  
+  <Expandable title="properties">
+    <ResponseField name="state" type="string">
+      Current lifecycle state of the sandbox ("Pending" on creation)
+    </ResponseField>
+    
+    <ResponseField name="reason" type="string">
+      Short machine-readable reason code for the current state.
+      
+      Examples: "user_delete", "ttl_expiry", "provision_timeout", "runtime_error"
+    </ResponseField>
+    
+    <ResponseField name="message" type="string">
+      Human-readable message describing the current state or reason for state transition
+    </ResponseField>
+    
+    <ResponseField name="lastTransitionAt" type="string">
+      Timestamp of the last state transition (RFC 3339 format)
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+<ResponseField name="metadata" type="object">
+  Custom metadata from creation request
+</ResponseField>
+
+<ResponseField name="entrypoint" type="array">
+  Entry process specification from creation request
+</ResponseField>
+
+<ResponseField name="expiresAt" type="string">
+  Timestamp when sandbox will auto-terminate (RFC 3339 format)
+</ResponseField>
+
+<ResponseField name="createdAt" type="string">
+  Sandbox creation timestamp (RFC 3339 format)
+</ResponseField>
+
+## Response Headers
+
+<ResponseField name="X-Request-ID" type="string">
+  Unique request identifier for tracing
+</ResponseField>
+
+<ResponseField name="Location" type="string">
+  URI of the newly created sandbox resource
+</ResponseField>
+
+<Note>
+The create response does not include `image` and `updatedAt` fields. Use `GET /v1/sandboxes/{sandboxId}` to retrieve the complete sandbox information including image spec.
+</Note>
+
+## Status Code
+
+<ResponseField name="202" type="Accepted">
+  Sandbox created and accepted for provisioning.
+  
+  The returned sandbox includes:
+  - `id`: Unique sandbox identifier
+  - `status.state: "Pending"` (auto-starting provisioning)
+  - `status.reason` and `status.message` indicating initialization stage
+  - `metadata`, `expiresAt`, `createdAt`: Core sandbox information
+  
+  To track provisioning progress, poll `GET /v1/sandboxes/{sandboxId}`. The sandbox will automatically transition to `Running` state once provisioning completes.
+</ResponseField>
+
+## Error Responses
+
+<ResponseField name="400" type="Bad Request">
+  The request was invalid or malformed
+</ResponseField>
+
+<ResponseField name="401" type="Unauthorized">
+  Authentication credentials are missing or invalid
+</ResponseField>
+
+<ResponseField name="409" type="Conflict">
+  The operation conflicts with the current state
+</ResponseField>
+
+<ResponseField name="500" type="Internal Server Error">
+  An unexpected server error occurred
+</ResponseField>
+
+## Example Request
+
+### Deny by default with allowed domains
+
+```bash
+curl -X POST http://localhost:8080/v1/sandboxes \
+  -H "OPEN-SANDBOX-API-KEY: your-api-key" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "image": {
+      "uri": "python:3.11"
+    },
+    "timeout": 3600,
+    "resourceLimits": {
+      "cpu": "500m",
+      "memory": "512Mi"
+    },
+    "entrypoint": ["python", "/app/main.py"],
+    "networkPolicy": {
+      "defaultAction": "deny",
+      "egress": [
+        {
+          "action": "allow",
+          "target": "pypi.org"
+        }
+      ]
+    }
+  }'
+```
+
+### Allow by default with a deny rule
+
+```bash
+curl -X POST http://localhost:8080/v1/sandboxes \
+  -H "OPEN-SANDBOX-API-KEY: your-api-key" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "image": {
+      "uri": "python:3.11"
+    },
+    "timeout": 3600,
+    "resourceLimits": {
+      "cpu": "500m",
+      "memory": "512Mi"
+    },
+    "entrypoint": ["python", "/app/main.py"],
+    "networkPolicy": {
+      "defaultAction": "allow",
+      "egress": [
+        {
+          "action": "deny",
+          "target": "bad.example.com"
+        }
+      ]
+    }
+  }'
+```
+
+## Example Response
+
+```json
+{
+  "id": "sandbox-abc123",
+  "status": {
+    "state": "Pending",
+    "reason": "provisioning",
+    "message": "Sandbox is being provisioned",
+    "lastTransitionAt": "2026-03-01T10:30:00Z"
+  },
+  "metadata": {},
+  "entrypoint": ["python", "/app/main.py"],
+  "expiresAt": "2026-03-01T11:30:00Z",
+  "createdAt": "2026-03-01T10:30:00Z"
+}
+```

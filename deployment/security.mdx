@@ -1,0 +1,640 @@
+---
+title: Security Best Practices
+description: Hardening OpenSandbox deployments for production environments
+---
+
+Security is critical when running containerized sandboxes in production. This guide covers authentication, container hardening, network isolation, and operational security practices.
+
+## Authentication and Access Control
+
+### API Key Authentication
+
+Always enable API key authentication in production:
+
+```toml
+[server]
+api_key = "your-secret-api-key-change-this"
+```
+
+**Best Practices:**
+
+- Use a strong, randomly generated API key (minimum 32 characters)
+- Store keys in a secrets manager (Vault, AWS Secrets Manager, etc.)
+- Never commit keys to version control
+- Rotate keys regularly
+- Use different keys for different environments
+
+**Disable Authentication Only For:**
+
+- Local development
+- Trusted internal networks
+- Testing environments
+
+Authentication is enforced when `api_key` is set. If empty or missing, all API endpoints (except `/health`, `/docs`, `/redoc`) are accessible without authentication.
+
+### Client Request Authentication
+
+All authenticated requests must include the `OPEN-SANDBOX-API-KEY` header:
+
+```bash
+curl -H "OPEN-SANDBOX-API-KEY: your-secret-api-key" \
+  http://localhost:8080/v1/sandboxes
+```
+
+**Protect API Keys:**
+
+- Use HTTPS/TLS for all API communication
+- Avoid logging API keys in application logs
+- Monitor for unauthorized access attempts
+- Implement rate limiting at the reverse proxy level
+
+## Container Security Hardening
+
+### Drop Dangerous Capabilities
+
+Linux capabilities control privileged operations. Drop unnecessary capabilities:
+
+```toml
+[docker]
+drop_capabilities = [
+  "AUDIT_WRITE",      # Prevent audit log manipulation
+  "MKNOD",            # Block device node creation
+  "NET_ADMIN",        # Disable network configuration
+  "NET_RAW",          # Prevent raw socket creation
+  "SYS_ADMIN",        # Block administrative operations
+  "SYS_MODULE",       # Prevent kernel module loading
+  "SYS_PTRACE",       # Disable process tracing
+  "SYS_TIME",         # Block system clock changes
+  "SYS_TTY_CONFIG"    # Prevent TTY configuration
+]
+```
+
+**Why Drop These Capabilities:**
+
+- `SYS_ADMIN`: Prevents container escape vulnerabilities
+- `NET_ADMIN`: Blocks network spoofing and routing attacks
+- `SYS_MODULE`: Prevents kernel module injection
+- `SYS_PTRACE`: Prevents process memory inspection
+- `NET_RAW`: Prevents packet crafting and sniffing
+
+### Block Privilege Escalation
+
+Prevent processes from gaining new privileges:
+
+```toml
+[docker]
+no_new_privileges = true
+```
+
+This prevents:
+
+- Setuid/setgid binary exploitation
+- Privilege escalation via file capabilities
+- sudo/su within containers
+
+### Process Limits
+
+Limit process creation to prevent fork bombs:
+
+```toml
+[docker]
+pids_limit = 512  # Set to null to disable
+```
+
+Recommended values:
+
+- **Light workloads**: 256-512 processes
+- **Heavy workloads**: 1024-2048 processes
+- **Unlimited**: `null` (not recommended)
+
+### Seccomp Profiles
+
+Seccomp filters system calls to reduce the attack surface:
+
+```toml
+[docker]
+seccomp_profile = ""  # Empty uses Docker default
+```
+
+**Options:**
+
+- **Empty string**: Docker default seccomp profile (recommended)
+- **Absolute path**: Custom seccomp JSON profile
+- **unconfined**: Disable seccomp (not recommended)
+
+Docker's default profile blocks ~44 system calls including:
+
+- `clone` with dangerous flags
+- `reboot`
+- `swapon`/`swapoff`
+- `mount`/`umount`
+- Keyring manipulation
+
+### AppArmor Profiles
+
+AppArmor provides mandatory access control:
+
+```toml
+[docker]
+apparmor_profile = "docker-default"  # When AppArmor is available
+```
+
+**Profile Options:**
+
+- `""`: No AppArmor profile (default)
+- `"docker-default"`: Docker's default AppArmor profile
+- Custom profile name: Your organization's profile
+
+**Check AppArmor Availability:**
+
+```bash
+# Check if AppArmor is loaded
+sudo aa-status
+
+# View Docker's default profile
+sudo cat /etc/apparmor.d/docker
+```
+
+## Network Security
+
+### Network Isolation
+
+Use bridge mode for network isolation:
+
+```toml
+[docker]
+network_mode = "bridge"  # Isolated container networking
+```
+
+**Bridge Mode Benefits:**
+
+- Sandboxes cannot directly access each other
+- Host network is isolated from sandboxes
+- Port conflicts eliminated
+- Network policies enforceable
+
+**Host Mode Risks:**
+
+```toml
+[docker]
+network_mode = "host"  # Shared host network - use only when necessary
+```
+
+- No network isolation
+- Port conflicts possible
+- Direct access to host network
+- Better performance but less secure
+
+### Network Policy Enforcement
+
+Control outbound traffic with network policies:
+
+```toml
+[runtime]
+type = "docker"
+execd_image = "opensandbox/execd:v1.0.6"
+
+[egress]
+image = "opensandbox/egress:v1.0.1"
+```
+
+**Requirements:**
+
+- Bridge network mode only
+- Egress sidecar image configured
+- Main container drops `NET_ADMIN` capability
+- Sidecar retains `NET_ADMIN` for iptables management
+
+**Example Request:**
+
+```json
+{
+  "image": {"uri": "python:3.11-slim"},
+  "entrypoint": ["python", "-m", "http.server", "8000"],
+  "timeout": 3600,
+  "networkPolicy": {
+    "defaultAction": "deny",
+    "egress": [
+      {"action": "allow", "target": "pypi.org"},
+      {"action": "allow", "target": "*.python.org"},
+      {"action": "deny", "target": "10.0.0.0/8"}  # Block private networks
+    ]
+  }
+}
+```
+
+**Network Policy Best Practices:**
+
+- Default deny all egress traffic
+- Allowlist only required destinations
+- Block private IP ranges (RFC 1918)
+- Block cloud metadata endpoints (169.254.169.254)
+- Log denied connections for monitoring
+
+### TLS/HTTPS
+
+Run OpenSandbox behind a reverse proxy with TLS:
+
+```toml
+[server]
+host = "127.0.0.1"  # Bind to localhost only
+port = 8080
+```
+
+**Reverse Proxy Configuration (Nginx):**
+
+```nginx
+server {
+  listen 443 ssl http2;
+  server_name api.sandbox.example.com;
+
+  ssl_certificate /etc/ssl/certs/sandbox.crt;
+  ssl_certificate_key /etc/ssl/private/sandbox.key;
+  ssl_protocols TLSv1.2 TLSv1.3;
+  ssl_ciphers HIGH:!aNULL:!MD5;
+
+  location / {
+    proxy_pass http://127.0.0.1:8080;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+  }
+}
+```
+
+## Resource Limits
+
+Enforce resource quotas to prevent resource exhaustion:
+
+```json
+{
+  "resourceLimits": {
+    "cpu": "500m",      // 0.5 CPU cores
+    "memory": "512Mi"   // 512 MiB RAM
+  }
+}
+```
+
+**Recommended Limits:**
+
+| Workload Type | CPU | Memory |
+|---------------|-----|--------|
+| Light (web servers) | 100m-500m | 128Mi-512Mi |
+| Medium (build tasks) | 500m-2000m | 512Mi-2Gi |
+| Heavy (ML inference) | 2000m-4000m | 2Gi-8Gi |
+
+**Why Resource Limits Matter:**
+
+- Prevent single sandbox from consuming all host resources
+- Enable fair resource sharing
+- Predictable performance
+- Protection against resource exhaustion attacks
+
+## Storage Security
+
+### Host Path Restrictions
+
+Limit bind mount access to trusted paths:
+
+```toml
+[storage]
+allowed_host_paths = ["/data/opensandbox", "/tmp/sandbox"]
+```
+
+**Security Implications:**
+
+- **Empty list**: All paths allowed (dangerous in production)
+- **Non-empty list**: Only prefixes in list are allowed
+- Prevents access to sensitive host directories
+
+**Dangerous Paths to Block:**
+
+- `/etc`: System configuration
+- `/root`: Root user home
+- `/var/run/docker.sock`: Docker daemon socket
+- `/proc`, `/sys`: Kernel interfaces
+- User home directories
+
+### Read-Only Filesystems
+
+Mount root filesystem as read-only when possible:
+
+```json
+{
+  "rootfs": {
+    "readonly": true
+  },
+  "tmpfs": ["/tmp", "/var/tmp"]  // Writable tmpfs
+}
+```
+
+Benefits:
+
+- Prevents malware persistence
+- Protects against container modification
+- Forces use of volumes for state
+
+## Image Security
+
+### Use Trusted Images
+
+Only allow vetted container images:
+
+```toml
+# Not yet implemented - planned feature
+[image_policy]
+allowed_registries = [
+  "docker.io/opensandbox",
+  "your-private-registry.example.com"
+]
+block_latest_tag = true
+require_signature = true
+```
+
+**Manual Image Vetting:**
+
+1. Use official images from trusted registries
+2. Pin specific image tags (avoid `latest`)
+3. Scan images for vulnerabilities
+4. Review Dockerfiles before use
+5. Use minimal base images (alpine, distroless)
+
+### Image Scanning
+
+Scan images for vulnerabilities:
+
+```bash
+# Using Trivy
+trivy image python:3.11-slim
+
+# Using Grype
+grype python:3.11-slim
+
+# Using Docker Scout
+docker scout cves python:3.11-slim
+```
+
+### Private Registry Authentication
+
+Configure Docker credential helpers:
+
+```bash
+# Configure Docker to use credential helper
+docker login your-registry.example.com
+
+# Or use environment variables
+export DOCKER_CONFIG=/path/to/docker/config.json
+```
+
+## Kubernetes Security
+
+### Pod Security Standards
+
+Apply Pod Security Standards to the opensandbox namespace:
+
+```yaml
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: opensandbox
+  labels:
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/audit: restricted
+    pod-security.kubernetes.io/warn: restricted
+```
+
+### Network Policies
+
+Restrict pod network access:
+
+```yaml
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: sandbox-isolation
+  namespace: opensandbox
+spec:
+  podSelector:
+    matchLabels:
+      app: opensandbox-sandbox
+  policyTypes:
+  - Ingress
+  - Egress
+  egress:
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          name: kube-system
+    ports:
+    - protocol: TCP
+      port: 53  # DNS only
+```
+
+### RBAC Configuration
+
+Minimize service account permissions:
+
+```yaml
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: opensandbox-controller
+  namespace: opensandbox
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: opensandbox-controller
+  namespace: opensandbox
+rules:
+- apiGroups: ["sandbox.opensandbox.io"]
+  resources: ["batchsandboxes", "pools"]
+  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+- apiGroups: [""]
+  resources: ["pods"]
+  verbs: ["get", "list", "watch", "create", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: opensandbox-controller
+  namespace: opensandbox
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: opensandbox-controller
+subjects:
+- kind: ServiceAccount
+  name: opensandbox-controller
+  namespace: opensandbox
+```
+
+## Monitoring and Auditing
+
+### Enable Logging
+
+Collect logs for security monitoring:
+
+```toml
+[server]
+log_level = "INFO"  # or "DEBUG" for detailed logs
+```
+
+**Log Events to Monitor:**
+
+- Authentication failures
+- Sandbox creation/deletion
+- Resource quota violations
+- Network policy denials
+- Container exits and crashes
+
+### Centralized Logging
+
+Forward logs to a SIEM or log aggregator:
+
+```bash
+# Using Docker logging driver
+docker run -d \
+  --log-driver=syslog \
+  --log-opt syslog-address=tcp://logs.example.com:514 \
+  opensandbox-server
+
+# Using Kubernetes Fluentd/Fluent Bit
+# Deploy as DaemonSet to collect pod logs
+```
+
+### Audit Trail
+
+Track all API operations:
+
+```python
+# Example middleware for audit logging
+import logging
+from datetime import datetime
+
+logger = logging.getLogger("audit")
+
+@app.middleware("http")
+async def audit_log(request: Request, call_next):
+    start = datetime.utcnow()
+    response = await call_next(request)
+    duration = (datetime.utcnow() - start).total_seconds()
+    
+    logger.info({
+        "timestamp": start.isoformat(),
+        "method": request.method,
+        "path": request.url.path,
+        "client": request.client.host,
+        "status": response.status_code,
+        "duration": duration
+    })
+    
+    return response
+```
+
+## Incident Response
+
+### Sandbox Compromise Detection
+
+Monitor for indicators of compromise:
+
+- Unexpected network connections
+- High CPU/memory usage
+- Failed authentication attempts
+- Unusual process executions
+- Container escapes
+
+### Emergency Procedures
+
+**Immediate Actions:**
+
+1. Delete compromised sandboxes:
+   ```bash
+   curl -X DELETE \
+     -H "OPEN-SANDBOX-API-KEY: your-api-key" \
+     http://localhost:8080/v1/sandboxes/{sandbox_id}
+   ```
+
+2. Rotate API keys:
+   ```toml
+   [server]
+   api_key = "new-rotated-api-key"
+   ```
+
+3. Review logs for attack patterns
+
+4. Update security policies
+
+5. Patch vulnerabilities
+
+## Production Security Checklist
+
+<Steps>
+  <Step title="Enable API Key Authentication">
+    - [ ] Set strong `server.api_key`
+    - [ ] Store keys in secrets manager
+    - [ ] Enable TLS/HTTPS with reverse proxy
+  </Step>
+
+  <Step title="Harden Container Security">
+    - [ ] Drop dangerous capabilities
+    - [ ] Enable `no_new_privileges`
+    - [ ] Set process limits (`pids_limit`)
+    - [ ] Apply seccomp profile
+    - [ ] Configure AppArmor (if available)
+  </Step>
+
+  <Step title="Configure Network Isolation">
+    - [ ] Use bridge network mode
+    - [ ] Enable egress sidecar for network policies
+    - [ ] Block private IP ranges
+    - [ ] Configure ingress gateway
+  </Step>
+
+  <Step title="Restrict Storage Access">
+    - [ ] Set `allowed_host_paths` allowlist
+    - [ ] Avoid binding sensitive host directories
+    - [ ] Use read-only root filesystems
+  </Step>
+
+  <Step title="Implement Resource Controls">
+    - [ ] Set CPU/memory limits on all sandboxes
+    - [ ] Configure appropriate quotas per workload
+  </Step>
+
+  <Step title="Secure Image Supply Chain">
+    - [ ] Use trusted registries only
+    - [ ] Pin specific image tags
+    - [ ] Scan images for vulnerabilities
+    - [ ] Review Dockerfiles
+  </Step>
+
+  <Step title="Enable Monitoring">
+    - [ ] Configure centralized logging
+    - [ ] Set up audit trails
+    - [ ] Monitor for security events
+    - [ ] Set up alerting
+  </Step>
+
+  <Step title="Kubernetes Security (if applicable)">
+    - [ ] Apply Pod Security Standards
+    - [ ] Configure Network Policies
+    - [ ] Minimize RBAC permissions
+    - [ ] Use namespaces for isolation
+  </Step>
+</Steps>
+
+## Further Reading
+
+- [Docker Security Best Practices](https://docs.docker.com/engine/security/)
+- [Kubernetes Security Documentation](https://kubernetes.io/docs/concepts/security/)
+- [OWASP Container Security](https://owasp.org/www-project-container-security/)
+- [CIS Docker Benchmark](https://www.cisecurity.org/benchmark/docker)
+- [CIS Kubernetes Benchmark](https://www.cisecurity.org/benchmark/kubernetes)
+
+## Next Steps
+
+- [Complete configuration reference](/deployment/configuration)
+- [Docker runtime setup](/deployment/docker-runtime)
+- [Kubernetes runtime deployment](/deployment/kubernetes-runtime)

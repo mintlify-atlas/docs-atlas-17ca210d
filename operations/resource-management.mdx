@@ -1,0 +1,449 @@
+---
+title: Resource Management
+description: Configure CPU, memory, and resource quotas for sandboxes
+---
+
+OpenSandbox provides flexible resource management capabilities to control CPU, memory, and other system resources for sandboxed environments.
+
+## Resource Limits
+
+### Kubernetes-style Resource Specs
+
+OpenSandbox uses Kubernetes-style resource specifications for CPU and memory limits:
+
+```bash
+curl -X POST "http://localhost:8080/v1/sandboxes" \
+  -H "OPEN-SANDBOX-API-KEY: your-secret-api-key" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "image": {"uri": "python:3.11-slim"},
+    "entrypoint": ["python", "-m", "http.server", "8000"],
+    "timeout": 3600,
+    "resourceLimits": {
+      "cpu": "500m",
+      "memory": "512Mi"
+    }
+  }'
+```
+
+### CPU Specifications
+
+**Format:** `"<number>m"` (millicores) or `"<number>"` (cores)
+
+**Examples:**
+- `"100m"` = 0.1 CPU cores (100 millicores)
+- `"500m"` = 0.5 CPU cores
+- `"1"` = 1 full CPU core
+- `"2"` = 2 CPU cores
+
+**Use Cases:**
+
+| Workload Type | Recommended CPU | Example |
+|---------------|-----------------|----------|
+| Lightweight scripts | 100m - 250m | Simple Python/Node.js scripts |
+| API services | 250m - 500m | REST API endpoints |
+| Compute tasks | 500m - 2 | Data processing, ML inference |
+| Heavy computation | 2+ | Training, video processing |
+
+### Memory Specifications
+
+**Format:** `"<number>Ki/Mi/Gi"` (Kibibytes/Mebibytes/Gibibytes)
+
+**Examples:**
+- `"128Mi"` = 128 Mebibytes
+- `"512Mi"` = 512 Mebibytes
+- `"1Gi"` = 1 Gibibyte
+- `"4Gi"` = 4 Gibibytes
+
+**Use Cases:**
+
+| Workload Type | Recommended Memory | Example |
+|---------------|-------------------|----------|
+| Minimal processes | 64Mi - 128Mi | Shell scripts, curl |
+| Lightweight apps | 128Mi - 512Mi | Node.js, Python web servers |
+| Standard apps | 512Mi - 2Gi | Django, Spring Boot |
+| Memory-intensive | 2Gi+ | In-memory databases, ML models |
+
+## Docker Runtime Resource Controls
+
+### Process Limits
+
+Prevent fork bombs by limiting the number of processes:
+
+```toml
+# ~/.sandbox.toml
+[docker]
+pids_limit = 512  # Maximum number of processes
+```
+
+Set to `null` to disable the limit:
+
+```toml
+[docker]
+pids_limit = null
+```
+
+### Security Capabilities
+
+Drop dangerous Linux capabilities to reduce attack surface:
+
+```toml
+[docker]
+drop_capabilities = [
+  "AUDIT_WRITE",
+  "MKNOD",
+  "NET_ADMIN",
+  "NET_RAW",
+  "SYS_ADMIN",
+  "SYS_MODULE",
+  "SYS_PTRACE",
+  "SYS_TIME",
+  "SYS_TTY_CONFIG"
+]
+no_new_privileges = true
+```
+
+**Security Features:**
+
+<AccordionGroup>
+  <Accordion title="drop_capabilities">
+    Removes Linux capabilities from containers:
+    - **AUDIT_WRITE**: Prevents writing to audit log
+    - **MKNOD**: Prevents creating special files
+    - **NET_ADMIN**: Prevents network configuration changes
+    - **NET_RAW**: Prevents raw socket access
+    - **SYS_ADMIN**: Prevents most privileged operations
+    - **SYS_MODULE**: Prevents loading kernel modules
+    - **SYS_PTRACE**: Prevents process tracing
+    - **SYS_TIME**: Prevents system time changes
+    - **SYS_TTY_CONFIG**: Prevents TTY configuration
+  </Accordion>
+
+  <Accordion title="no_new_privileges">
+    Prevents processes from gaining additional privileges through setuid/setgid bits or capabilities.
+    
+    When enabled:
+    - Blocks privilege escalation attacks
+    - Prevents execution of setuid binaries
+    - Improves container security posture
+  </Accordion>
+
+  <Accordion title="AppArmor Profile">
+    Apply mandatory access control using AppArmor:
+    
+    ```toml
+    [docker]
+    apparmor_profile = "docker-default"
+    ```
+    
+    Leave empty (`""`) to use Docker's default profile or disable AppArmor.
+  </Accordion>
+
+  <Accordion title="Seccomp Profile">
+    Restrict system calls using Seccomp:
+    
+    ```toml
+    [docker]
+    seccomp_profile = "/path/to/custom-seccomp.json"
+    ```
+    
+    - Empty string: Use Docker's default seccomp profile
+    - Absolute path: Load custom seccomp profile from file
+  </Accordion>
+</AccordionGroup>
+
+## Kubernetes Resource Pooling
+
+### Pool Configuration
+
+Configure resource pools with capacity limits:
+
+```yaml
+apiVersion: sandbox.opensandbox.io/v1alpha1
+kind: Pool
+metadata:
+  name: example-pool
+spec:
+  template:
+    spec:
+      containers:
+      - name: sandbox-container
+        image: nginx:latest
+        resources:
+          limits:
+            cpu: "500m"
+            memory: "512Mi"
+          requests:
+            cpu: "250m"
+            memory: "256Mi"
+  capacitySpec:
+    bufferMin: 2      # Minimum standby resources
+    bufferMax: 10     # Maximum standby resources
+    poolMin: 5        # Minimum total pool size
+    poolMax: 20       # Maximum total pool size
+```
+
+### Capacity Parameters
+
+| Parameter | Description | Purpose |
+|-----------|-------------|----------|
+| `bufferMin` | Minimum available resources | Ensures instant provisioning |
+| `bufferMax` | Maximum available resources | Controls standby cost |
+| `poolMin` | Minimum total pool size | Baseline capacity |
+| `poolMax` | Maximum total pool size | Resource ceiling |
+
+**Example Scenario:**
+- `poolMin: 5` → Always maintain 5 total resources
+- `poolMax: 20` → Never exceed 20 total resources
+- `bufferMin: 2` → Keep at least 2 ready for allocation
+- `bufferMax: 10` → Don't pre-warm more than 10
+
+### Resource Requests vs Limits
+
+```yaml
+resources:
+  requests:     # Minimum guaranteed resources
+    cpu: "250m"
+    memory: "256Mi"
+  limits:       # Maximum allowed resources
+    cpu: "500m"
+    memory: "512Mi"
+```
+
+**Best Practices:**
+- **Requests**: Set to typical usage for scheduling
+- **Limits**: Set to maximum expected usage
+- **Ratio**: Keep limits 1.5-2x requests for burstability
+
+## Network Policy Resource Management
+
+### Egress Control
+
+Control network egress to manage bandwidth and security:
+
+```json
+{
+  "image": {"uri": "python:3.11-slim"},
+  "entrypoint": ["python", "-m", "http.server", "8000"],
+  "timeout": 3600,
+  "resourceLimits": {
+    "cpu": "500m",
+    "memory": "512Mi"
+  },
+  "networkPolicy": {
+    "defaultAction": "deny",
+    "egress": [
+      {"action": "allow", "target": "pypi.org"},
+      {"action": "allow", "target": "*.python.org"}
+    ]
+  }
+}
+```
+
+**Requirements:**
+- Docker bridge mode (`network_mode = "bridge"`)
+- Egress sidecar configured:
+
+```toml
+[egress]
+image = "opensandbox/egress:v1.0.1"
+```
+
+### Sidecar Resource Impact
+
+When using network policies, an egress sidecar is injected:
+
+**Additional Resources:**
+- CPU overhead: ~50m
+- Memory overhead: ~64Mi
+- Network namespace sharing
+
+**Example Total Resources:**
+```
+Main container:  500m CPU, 512Mi RAM
+Egress sidecar:   50m CPU,  64Mi RAM
+─────────────────────────────────────
+Total:           550m CPU, 576Mi RAM
+```
+
+## Storage and Volume Management
+
+### Host Path Allowlist
+
+Restrict bind mount locations for security:
+
+```toml
+[storage]
+allowed_host_paths = [
+  "/data/opensandbox",
+  "/tmp/sandbox"
+]
+```
+
+**Security Considerations:**
+- Empty list = all paths allowed (not recommended for production)
+- Restrict to specific directories
+- Use separate paths per team/project
+- Avoid mounting sensitive system paths
+
+### Volume Resource Limits
+
+While OpenSandbox doesn't directly limit disk space, you can:
+
+1. **Use Docker storage driver limits**:
+```bash
+docker run --storage-opt size=10G ...
+```
+
+2. **Mount limited tmpfs**:
+```yaml
+volumes:
+- name: temp
+  emptyDir:
+    sizeLimit: "1Gi"
+```
+
+3. **Set PVC quotas in Kubernetes**:
+```yaml
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: sandbox-storage
+spec:
+  resources:
+    requests:
+      storage: 5Gi
+```
+
+## Timeout and Expiration Management
+
+### Sandbox TTL
+
+Set automatic expiration for resource cleanup:
+
+```json
+{
+  "image": {"uri": "python:3.11-slim"},
+  "entrypoint": ["sleep", "infinity"],
+  "timeout": 3600  // Expires after 1 hour
+}
+```
+
+### Renew Expiration
+
+Extend sandbox lifetime before expiration:
+
+```bash
+curl -X POST \
+  "http://localhost:8080/v1/sandboxes/{sandbox_id}/renew-expiration" \
+  -H "OPEN-SANDBOX-API-KEY: your-secret-api-key" \
+  -H "Content-Type: application/json" \
+  -d '{"expiresAt": "2024-01-15T12:30:00Z"}'
+```
+
+### Failed Sandbox Cleanup
+
+Configure cleanup for failed sandboxes:
+
+```bash
+export PENDING_FAILURE_TTL=3600  # 1 hour in seconds
+```
+
+Failed sandboxes in "Pending" state are automatically cleaned up after this TTL.
+
+## Best Practices
+
+<AccordionGroup>
+  <Accordion title="Right-size resource allocations">
+    **Avoid over-provisioning:**
+    - Start with conservative limits (e.g., 250m CPU, 256Mi RAM)
+    - Monitor actual usage via metrics
+    - Adjust based on real workload patterns
+    - Use requests < limits for burstability
+    
+    **Testing approach:**
+    ```bash
+    # Monitor resource usage
+    curl http://sandbox:44772/metrics
+    
+    # Adjust limits based on observed usage
+    # If cpu_used_pct consistently >80%, increase CPU
+    # If mem_used_mib approaching limit, increase memory
+    ```
+  </Accordion>
+
+  <Accordion title="Configure resource pools efficiently">
+    **Pool sizing strategy:**
+    - Set `bufferMin` to expected concurrent demand
+    - Set `bufferMax` to handle burst traffic
+    - Set `poolMax` to cluster capacity limits
+    - Monitor pool allocation rates
+    
+    **Example calculations:**
+    ```
+    Expected concurrent users: 5
+    Peak burst: 15
+    Cluster capacity: 30
+    
+    Recommended:
+    bufferMin: 5
+    bufferMax: 15
+    poolMax: 30
+    ```
+  </Accordion>
+
+  <Accordion title="Implement security hardening">
+    **Production security baseline:**
+    ```toml
+    [docker]
+    drop_capabilities = [
+      "AUDIT_WRITE", "MKNOD", "NET_ADMIN", "NET_RAW",
+      "SYS_ADMIN", "SYS_MODULE", "SYS_PTRACE",
+      "SYS_TIME", "SYS_TTY_CONFIG"
+    ]
+    no_new_privileges = true
+    pids_limit = 512
+    apparmor_profile = "docker-default"
+    seccomp_profile = ""
+    ```
+    
+    Test security settings before deploying to production.
+  </Accordion>
+
+  <Accordion title="Set appropriate timeouts">
+    **Timeout guidelines:**
+    - Short-lived tasks: 300-900 seconds (5-15 minutes)
+    - Interactive sessions: 1800-3600 seconds (30-60 minutes)
+    - Long-running jobs: 3600-7200 seconds (1-2 hours)
+    - Background services: Use longer TTLs with renewal
+    
+    **Automatic cleanup:**
+    ```bash
+    # Clean up failed sandboxes after 1 hour
+    export PENDING_FAILURE_TTL=3600
+    ```
+  </Accordion>
+
+  <Accordion title="Monitor and adjust quotas">
+    **Continuous optimization:**
+    1. Collect metrics over time
+    2. Analyze resource usage patterns
+    3. Identify underutilized resources
+    4. Adjust limits to improve density
+    5. Monitor for resource contention
+    
+    **Tools:**
+    - Prometheus for metrics aggregation
+    - Grafana for visualization
+    - Kubernetes resource quotas
+    - Custom monitoring scripts
+  </Accordion>
+</AccordionGroup>
+
+## Environment Variables
+
+| Variable | Description | Default |
+|----------|-------------|----------|
+| `SANDBOX_CONFIG_PATH` | Override config file location | `~/.sandbox.toml` |
+| `DOCKER_HOST` | Docker daemon URL | `unix:///var/run/docker.sock` |
+| `PENDING_FAILURE_TTL` | TTL for failed sandboxes (seconds) | `3600` |

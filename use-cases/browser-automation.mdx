@@ -1,0 +1,444 @@
+---
+title: Browser Automation
+description: Automate Chrome browsers in isolated sandboxes for web scraping, testing, and AI agents
+---
+
+OpenSandbox provides headless and headful Chrome browser environments with VNC and DevTools access, enabling safe browser automation for web agents, testing, and data extraction.
+
+## Overview
+
+Browser automation in OpenSandbox allows you to:
+
+- Run Chrome with remote debugging enabled
+- Access browsers via VNC for visual monitoring
+- Control browsers programmatically via Chrome DevTools Protocol
+- Isolate browser sessions for security and reproducibility
+- Scale browser instances independently
+
+## Architecture
+
+The Chrome sandbox includes:
+
+- **Chromium browser** with headless/headful modes
+- **VNC server** (port 5901) for remote desktop access
+- **Chrome DevTools** (port 9222) for programmatic control
+- **execd daemon** (port 44772) for command execution
+
+```
+┌────────────────────────────────────┐
+│     Chrome Sandbox Container       │
+│                                    │
+│  ┌──────────────────────────────┐ │
+│  │   Chromium Browser           │ │
+│  │   - Headless/Headful         │ │
+│  │   - DevTools Protocol        │ │
+│  └──────────────────────────────┘ │
+│                                    │
+│  ┌──────────┐  ┌──────────────┐  │
+│  │ VNC      │  │ DevTools     │  │
+│  │ :5901    │  │ :9222        │  │
+│  └──────────┘  └──────────────┘  │
+│                                    │
+│  ┌──────────────────────────────┐ │
+│  │ execd daemon :44772          │ │
+│  └──────────────────────────────┘ │
+└────────────────────────────────────┘
+         │          │          │
+         │          │          │
+    VNC Client  DevTools   SDK/API
+                 Client
+```
+
+## Getting Started
+
+### 1. Pull or Build the Chrome Image
+
+```bash
+# Pull from Docker Hub
+docker pull opensandbox/chrome:latest
+
+# Or build from source
+cd examples/chrome
+docker build -t opensandbox/chrome .
+```
+
+### 2. Start OpenSandbox Server
+
+```bash
+uv pip install opensandbox-server
+opensandbox-server init-config ~/.sandbox.toml --example docker
+opensandbox-server
+```
+
+### 3. Create a Chrome Sandbox
+
+```python
+import asyncio
+from opensandbox import Sandbox
+from opensandbox.config import ConnectionConfig
+
+async def main():
+    sandbox = await Sandbox.create(
+        image="opensandbox/chrome:latest",
+        timeout=timedelta(minutes=5),
+        entrypoint=["/entrypoint"],
+        connection_config=ConnectionConfig(domain="localhost:8080")
+    )
+    
+    # Get endpoints
+    execd = await sandbox.get_endpoint(44772)
+    print(f"execd daemon: {execd.endpoint}")
+    
+    vnc = await sandbox.get_endpoint(5901)
+    print(f"VNC endpoint: {vnc.endpoint}")
+    
+    devtools = await sandbox.get_endpoint(9222)
+    print(f"DevTools endpoint: {devtools.endpoint}/json")
+
+asyncio.run(main())
+```
+
+View the complete example: [`examples/chrome/`](https://github.com/opensandbox-io/opensandbox/tree/main/examples/chrome)
+
+## Access Methods
+
+### VNC Access
+
+Connect to the browser visually using any VNC client:
+
+```bash
+# Example VNC endpoint
+vncviewer 127.0.0.1:48379/proxy/5901
+```
+
+This allows you to:
+- See the browser UI in real-time
+- Debug visual rendering issues
+- Monitor agent interactions
+- Take screenshots and recordings
+
+### Chrome DevTools Protocol
+
+Control the browser programmatically via DevTools:
+
+```bash
+# Get available targets
+curl http://127.0.0.1:48379/proxy/9222/json
+```
+
+Response:
+```json
+[
+  {
+    "description": "",
+    "devtoolsFrontendUrl": "...",
+    "id": "2215AF60AC345E4BA6D822389CFC743B",
+    "title": "Google",
+    "type": "page",
+    "url": "https://www.google.com/",
+    "webSocketDebuggerUrl": "ws://127.0.0.1:52302/devtools/page/..."
+  }
+]
+```
+
+### MCP Integration
+
+Use the Chrome DevTools MCP server for AI agent integration:
+
+```bash
+# Install chrome-devtools-mcp
+npm install -g chrome-devtools-mcp
+
+# Connect to sandbox Chrome instance
+chrome-devtools-mcp --endpoint http://127.0.0.1:48379/proxy/9222
+```
+
+Reference: [chrome-devtools-mcp](https://github.com/ChromeDevTools/chrome-devtools-mcp)
+
+## Use Cases
+
+### Web Scraping
+
+Extract data from dynamic websites that require JavaScript:
+
+```python
+from playwright.async_api import async_playwright
+
+async def scrape_with_sandbox():
+    sandbox = await Sandbox.create("opensandbox/chrome:latest")
+    devtools = await sandbox.get_endpoint(9222)
+    
+    async with async_playwright() as p:
+        browser = await p.chromium.connect_over_cdp(
+            f"http://{devtools.endpoint}"
+        )
+        page = await browser.new_page()
+        await page.goto("https://example.com")
+        
+        # Extract data
+        data = await page.evaluate("() => document.body.textContent")
+        print(data)
+        
+        await browser.close()
+    await sandbox.kill()
+```
+
+### Automated Testing
+
+Run browser tests in isolated environments:
+
+```python
+async def run_tests():
+    sandbox = await Sandbox.create("opensandbox/chrome:latest")
+    
+    # Upload test files
+    await sandbox.files.write_file("test.html", html_content)
+    await sandbox.files.write_file("test.js", test_script)
+    
+    # Run tests via DevTools
+    devtools = await sandbox.get_endpoint(9222)
+    # ... connect and execute tests ...
+    
+    await sandbox.kill()
+```
+
+### AI Web Agents
+
+Enable AI agents to browse the web and interact with pages:
+
+```python
+async def web_agent_task(task: str):
+    sandbox = await Sandbox.create("opensandbox/chrome:latest")
+    devtools = await sandbox.get_endpoint(9222)
+    
+    # Initialize browser control
+    browser = await connect_to_chrome(devtools.endpoint)
+    
+    # Agent performs task
+    while not task_complete:
+        # LLM decides next action
+        action = await llm.decide_action(
+            task=task,
+            current_state=await get_page_state(browser)
+        )
+        
+        # Execute action (click, type, navigate, etc.)
+        await execute_action(browser, action)
+    
+    await sandbox.kill()
+```
+
+### Screenshot and PDF Generation
+
+Generate visual snapshots of web pages:
+
+```python
+async def generate_screenshot(url: str) -> bytes:
+    sandbox = await Sandbox.create("opensandbox/chrome:latest")
+    devtools = await sandbox.get_endpoint(9222)
+    
+    async with async_playwright() as p:
+        browser = await p.chromium.connect_over_cdp(
+            f"http://{devtools.endpoint}"
+        )
+        page = await browser.new_page()
+        await page.goto(url)
+        
+        screenshot = await page.screenshot(full_page=True)
+        await browser.close()
+    
+    await sandbox.kill()
+    return screenshot
+```
+
+## Configuration
+
+### Environment Variables
+
+- `SANDBOX_DOMAIN`: Sandbox server address (default: `localhost:8080`)
+- `SANDBOX_API_KEY`: API key for authentication
+
+### Chrome Image Customization
+
+Build custom Chrome images with additional tools:
+
+```dockerfile
+FROM opensandbox/chrome:latest
+
+# Install additional browser extensions
+COPY extensions/ /opt/chrome/extensions/
+
+# Configure Chrome flags
+ENV CHROME_FLAGS="--disable-gpu --no-sandbox"
+
+# Add custom scripts
+COPY scripts/ /opt/scripts/
+```
+
+## Integration with Automation Frameworks
+
+### Playwright
+
+```python
+from playwright.async_api import async_playwright
+
+async with async_playwright() as p:
+    browser = await p.chromium.connect_over_cdp(
+        f"http://{devtools_endpoint}"
+    )
+    page = await browser.new_page()
+    await page.goto("https://example.com")
+```
+
+### Selenium
+
+```python
+from selenium import webdriver
+from selenium.webdriver.chrome.options import Options
+
+options = Options()
+options.debugger_address = devtools_endpoint
+driver = webdriver.Chrome(options=options)
+driver.get("https://example.com")
+```
+
+### Puppeteer
+
+```javascript
+const puppeteer = require('puppeteer');
+
+const browser = await puppeteer.connect({
+  browserWSEndpoint: `ws://${devtoolsEndpoint}`
+});
+
+const page = await browser.newPage();
+await page.goto('https://example.com');
+```
+
+## Security Best Practices
+
+### Network Isolation
+
+Limit browser network access:
+
+```python
+sandbox = await Sandbox.create(
+    "opensandbox/chrome:latest",
+    network_mode="none"  # No external network access
+)
+```
+
+### Resource Limits
+
+Prevent resource exhaustion:
+
+```python
+sandbox = await Sandbox.create(
+    "opensandbox/chrome:latest",
+    memory_limit="1Gi",
+    cpu_limit="2",
+    timeout=timedelta(minutes=10)
+)
+```
+
+### Ephemeral Sessions
+
+Create fresh browser instances for each task:
+
+```python
+# Don't reuse sandboxes for multiple tasks
+async def process_url(url: str):
+    sandbox = await Sandbox.create("opensandbox/chrome:latest")
+    try:
+        # Process URL
+        pass
+    finally:
+        await sandbox.kill()  # Always cleanup
+```
+
+## Performance Optimization
+
+### Headless Mode
+
+Use headless mode when visual rendering isn't needed:
+
+```bash
+chromium --headless --disable-gpu --remote-debugging-port=9222
+```
+
+### Disable Unnecessary Features
+
+```bash
+chromium \
+  --disable-extensions \
+  --disable-images \
+  --disable-javascript \
+  --blink-settings=imagesEnabled=false
+```
+
+### Connection Pooling
+
+Reuse browser connections for multiple operations:
+
+```python
+async with Sandbox.create("opensandbox/chrome:latest") as sandbox:
+    devtools = await sandbox.get_endpoint(9222)
+    
+    async with async_playwright() as p:
+        browser = await p.chromium.connect_over_cdp(...)
+        
+        # Multiple operations with same browser
+        for url in urls:
+            page = await browser.new_page()
+            await page.goto(url)
+            # ... process ...
+            await page.close()
+```
+
+## Troubleshooting
+
+### Browser Won't Start
+
+Check sandbox logs:
+
+```python
+result = await sandbox.commands.run("ps aux | grep chrome")
+for line in result.logs.stdout:
+    print(line.text)
+```
+
+### DevTools Connection Failed
+
+Verify port exposure:
+
+```python
+endpoint = await sandbox.get_endpoint(9222)
+print(f"DevTools should be at: {endpoint.endpoint}")
+```
+
+### VNC Display Issues
+
+Check VNC server status:
+
+```python
+result = await sandbox.commands.run("ps aux | grep vnc")
+for line in result.logs.stdout:
+    print(line.text)
+```
+
+## Related Resources
+
+<CardGroup cols={2}>
+  <Card title="Chrome Example" icon="chrome" href="https://github.com/opensandbox-io/opensandbox/tree/main/examples/chrome">
+    Complete browser automation example
+  </Card>
+  <Card title="Playwright Example" icon="browser" href="https://github.com/opensandbox-io/opensandbox/tree/main/examples/playwright">
+    Playwright integration example
+  </Card>
+  <Card title="AI Coding Agents" icon="robot" href="/use-cases/coding-agents">
+    AI agents with code execution
+  </Card>
+  <Card title="Python SDK" icon="python" href="/sdks/python">
+    SDK reference documentation
+  </Card>
+</CardGroup>

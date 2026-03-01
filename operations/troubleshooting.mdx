@@ -1,0 +1,790 @@
+---
+title: Troubleshooting
+description: Common issues, solutions, and debugging techniques for OpenSandbox
+---
+
+This guide covers common issues you may encounter when operating OpenSandbox and provides solutions for debugging and resolving them.
+
+## Server Issues
+
+<AccordionGroup>
+  <Accordion title="Server fails to start">
+    **Symptoms:**
+    - Server exits immediately after starting
+    - Error messages about configuration
+    - Port binding failures
+
+    **Common Causes & Solutions:**
+
+    **1. Configuration file not found**
+    ```bash
+    # Error: Could not load config from ~/.sandbox.toml
+    
+    # Solution: Create config file
+    opensandbox-server init-config ~/.sandbox.toml --example docker
+    ```
+
+    **2. Port already in use**
+    ```bash
+    # Error: Address already in use: 0.0.0.0:8080
+    
+    # Solution: Check what's using the port
+    lsof -i :8080
+    
+    # Kill the process or change port in config
+    [server]
+    port = 8081
+    ```
+
+    **3. Invalid configuration syntax**
+    ```bash
+    # Error: TOML parsing error
+    
+    # Solution: Validate TOML syntax
+    cat ~/.sandbox.toml | python -c "import toml, sys; toml.load(sys.stdin)"
+    ```
+
+    **4. Docker daemon not accessible**
+    ```bash
+    # Error: Cannot connect to Docker daemon
+    
+    # Solution: Verify Docker is running
+    docker ps
+    
+    # Check DOCKER_HOST variable
+    echo $DOCKER_HOST
+    
+    # Set correct Docker socket
+    export DOCKER_HOST="unix:///var/run/docker.sock"
+    ```
+  </Accordion>
+
+  <Accordion title="API authentication failures">
+    **Symptoms:**
+    - 401 Unauthorized responses
+    - "Invalid API key" errors
+
+    **Solutions:**
+
+    **1. API key not configured**
+    ```toml
+    # ~/.sandbox.toml
+    [server]
+    api_key = "your-secret-api-key-change-this"
+    ```
+
+    **2. Missing header in requests**
+    ```bash
+    # Wrong - missing auth header
+    curl http://localhost:8080/v1/sandboxes
+    
+    # Correct - include API key header
+    curl -H "OPEN-SANDBOX-API-KEY: your-secret-api-key" \
+      http://localhost:8080/v1/sandboxes
+    ```
+
+    **3. Disable auth for development**
+    ```toml
+    [server]
+    # Comment out or remove api_key for local dev
+    # api_key = "your-secret-api-key"
+    ```
+  </Accordion>
+
+  <Accordion title="Health check endpoint returns errors">
+    **Diagnosis:**
+    ```bash
+    # Test server health
+    curl http://localhost:8080/health
+    
+    # Check server logs
+    tail -f /var/log/opensandbox/server.log
+    ```
+
+    **Solutions:**
+    - Verify server is fully started (check logs for "Application startup complete")
+    - Check for runtime initialization errors
+    - Ensure Docker/Kubernetes runtime is accessible
+    - Review log_level in configuration for more details
+  </Accordion>
+</AccordionGroup>
+
+## Sandbox Creation Issues
+
+<AccordionGroup>
+  <Accordion title="Sandbox stuck in Pending state">
+    **Symptoms:**
+    - Sandbox never transitions to Running
+    - Status remains Pending for extended period
+
+    **Debugging Steps:**
+
+    **1. Check sandbox status**
+    ```bash
+    curl -H "OPEN-SANDBOX-API-KEY: your-api-key" \
+      http://localhost:8080/v1/sandboxes/{sandbox_id}
+    ```
+
+    Look for status.reason and status.message fields.
+
+    **2. Common causes:**
+
+    **Image pull failures:**
+    ```json
+    {
+      "status": {
+        "state": "Failed",
+        "reason": "IMAGE_PULL_ERROR",
+        "message": "Failed to pull image: manifest not found"
+      }
+    }
+    ```
+
+    **Solutions:**
+    - Verify image exists: `docker pull python:3.11-slim`
+    - Check image registry credentials
+    - Use full image URI including registry
+
+    **Resource constraints:**
+    - Insufficient CPU/memory on host
+    - Resource limits too high
+    - Pool capacity exceeded
+
+    **Solutions:**
+    ```bash
+    # Check Docker resources
+    docker info | grep -E "CPUs|Memory"
+    
+    # Reduce resource limits
+    "resourceLimits": {
+      "cpu": "250m",
+      "memory": "256Mi"
+    }
+    ```
+
+    **3. Enable debug logging**
+    ```toml
+    [server]
+    log_level = "DEBUG"
+    ```
+
+    Restart server and review detailed logs.
+  </Accordion>
+
+  <Accordion title="Entrypoint validation errors">
+    **Error:**
+    ```json
+    {
+      "detail": "entrypoint must be a non-empty array"
+    }
+    ```
+
+    **Solutions:**
+
+    **1. Empty entrypoint array**
+    ```json
+    // Wrong
+    {
+      "image": {"uri": "python:3.11-slim"},
+      "entrypoint": []  // Invalid
+    }
+    
+    // Correct
+    {
+      "image": {"uri": "python:3.11-slim"},
+      "entrypoint": ["python", "-m", "http.server", "8000"]
+    }
+    ```
+
+    **2. Missing entrypoint entirely**
+    ```json
+    // Must include entrypoint field
+    {
+      "image": {"uri": "python:3.11-slim"},
+      "entrypoint": ["sleep", "infinity"],
+      "timeout": 3600
+    }
+    ```
+  </Accordion>
+
+  <Accordion title="Network policy errors">
+    **Error:**
+    ```
+    NetworkPolicy requires Docker bridge mode and egress.image configuration
+    ```
+
+    **Solution:**
+
+    **1. Configure egress sidecar**
+    ```toml
+    [runtime]
+    type = "docker"
+    execd_image = "opensandbox/execd:v1.0.6"
+    
+    [egress]
+    image = "opensandbox/egress:v1.0.1"
+    
+    [docker]
+    network_mode = "bridge"  # Required for network policies
+    ```
+
+    **2. Pull egress image**
+    ```bash
+    docker pull opensandbox/egress:v1.0.1
+    ```
+
+    **3. Verify bridge mode**
+    - Network policies NOT supported in host mode
+    - Must use `network_mode = "bridge"`
+  </Accordion>
+
+  <Accordion title="Resource limit parsing errors">
+    **Common Errors:**
+
+    **Invalid CPU format:**
+    ```json
+    // Wrong
+    "resourceLimits": {"cpu": "500"}
+    
+    // Correct
+    "resourceLimits": {"cpu": "500m"}
+    ```
+
+    **Invalid memory format:**
+    ```json
+    // Wrong
+    "resourceLimits": {"memory": "512"}
+    
+    // Correct
+    "resourceLimits": {"memory": "512Mi"}
+    ```
+
+    **Valid formats:**
+    - CPU: `"100m"`, `"0.5"`, `"1"`
+    - Memory: `"128Mi"`, `"1Gi"`, `"512Mi"`
+  </Accordion>
+</AccordionGroup>
+
+## Runtime Issues
+
+<AccordionGroup>
+  <Accordion title="Docker runtime connection failures">
+    **Symptoms:**
+    - Cannot create sandboxes
+    - "Docker daemon not responding" errors
+
+    **Solutions:**
+
+    **1. Verify Docker is running**
+    ```bash
+    # Check Docker service
+    systemctl status docker
+    
+    # Start if stopped
+    sudo systemctl start docker
+    
+    # Test connection
+    docker ps
+    ```
+
+    **2. Check Docker socket permissions**
+    ```bash
+    # Verify socket exists
+    ls -la /var/run/docker.sock
+    
+    # Add user to docker group
+    sudo usermod -aG docker $USER
+    
+    # Reload groups (or logout/login)
+    newgrp docker
+    ```
+
+    **3. Configure Docker API timeout**
+    ```toml
+    [docker]
+    api_timeout = 300  # Increase timeout to 5 minutes
+    ```
+
+    **4. Remote Docker host**
+    ```bash
+    # Set Docker host environment variable
+    export DOCKER_HOST="ssh://user@remote-host"
+    
+    # Or in config
+    export DOCKER_HOST="tcp://10.0.0.1:2375"
+    ```
+  </Accordion>
+
+  <Accordion title="Kubernetes runtime issues">
+    **Symptoms:**
+    - Pods not created
+    - Timeout waiting for sandbox
+
+    **Solutions:**
+
+    **1. Verify kubeconfig**
+    ```toml
+    [kubernetes]
+    kubeconfig_path = "~/.kube/config"
+    namespace = "opensandbox"
+    ```
+
+    **2. Check namespace exists**
+    ```bash
+    kubectl get namespace opensandbox
+    
+    # Create if missing
+    kubectl create namespace opensandbox
+    ```
+
+    **3. Verify RBAC permissions**
+    ```bash
+    # Check service account permissions
+    kubectl auth can-i create pods --namespace opensandbox
+    kubectl auth can-i get pods --namespace opensandbox
+    kubectl auth can-i delete pods --namespace opensandbox
+    ```
+
+    **4. Check controller logs**
+    ```bash
+    kubectl logs -n opensandbox deployment/sandbox-controller
+    ```
+  </Accordion>
+
+  <Accordion title="Execd daemon not responding">
+    **Symptoms:**
+    - Cannot execute code or commands
+    - Ping endpoint timeout
+
+    **Diagnosis:**
+    ```bash
+    # Test execd health
+    curl http://sandbox-ip:44772/ping
+    
+    # Check if port is accessible
+    nc -zv sandbox-ip 44772
+    ```
+
+    **Solutions:**
+
+    **1. Verify execd image version**
+    ```toml
+    [runtime]
+    execd_image = "opensandbox/execd:v1.0.6"  # Use latest version
+    ```
+
+    **2. Check container logs**
+    ```bash
+    docker logs <sandbox-container-id>
+    ```
+
+    **3. Verify network connectivity**
+    - Host mode: Port 44772 directly accessible
+    - Bridge mode: Check port mappings and routing
+
+    **4. Access token authentication**
+    ```bash
+    # Include access token header
+    curl -H "X-EXECD-ACCESS-TOKEN: your-token" \
+      http://sandbox-ip:44772/metrics
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Networking Issues
+
+<AccordionGroup>
+  <Accordion title="Cannot access sandbox endpoints">
+    **Host Mode Issues:**
+
+    **1. Port already in use**
+    ```bash
+    # Error: Port 8000 already allocated
+    
+    # Solution: Only one sandbox at a time in host mode
+    # Or use bridge mode for multiple sandboxes
+    ```
+
+    **2. Firewall blocking access**
+    ```bash
+    # Check firewall rules
+    sudo iptables -L -n
+    
+    # Allow port (example)
+    sudo ufw allow 8000/tcp
+    ```
+
+    **Bridge Mode Issues:**
+
+    **1. Routing not configured**
+    ```toml
+    [docker]
+    network_mode = "bridge"
+    host_ip = "10.57.1.91"  # Set when server runs in container
+    ```
+
+    **2. Get endpoint URL**
+    ```bash
+    curl -H "OPEN-SANDBOX-API-KEY: your-api-key" \
+      http://localhost:8080/v1/sandboxes/{sandbox_id}/endpoints/8000
+    ```
+
+    Use returned endpoint URL instead of direct IP access.
+  </Accordion>
+
+  <Accordion title="Egress sidecar failures">
+    **Symptoms:**
+    - Network policy not enforced
+    - Sidecar container errors
+
+    **Diagnosis:**
+    ```bash
+    # List all containers including sidecars
+    docker ps -a | grep egress
+    
+    # Check sidecar logs
+    docker logs opensandbox-egress-<sandbox-id>
+    ```
+
+    **Solutions:**
+
+    **1. Missing egress image**
+    ```bash
+    # Pull egress image
+    docker pull opensandbox/egress:v1.0.1
+    
+    # Verify image exists
+    docker images | grep egress
+    ```
+
+    **2. Capability conflicts**
+    - Main container drops NET_ADMIN (required)
+    - Sidecar needs NET_ADMIN (automatically granted)
+    - Don't manually override these settings
+
+    **3. IPv6 disabled warning**
+    - Normal behavior when egress sidecar is active
+    - IPv6 automatically disabled for policy enforcement
+  </Accordion>
+
+  <Accordion title="Ingress gateway configuration">
+    **Direct Mode (Default):**
+    ```toml
+    [ingress]
+    mode = "direct"  # Docker runtime only
+    ```
+
+    **Gateway Mode (Kubernetes):**
+    ```toml
+    [ingress]
+    mode = "gateway"
+    gateway.address = "*.example.com"
+    gateway.route.mode = "wildcard"  # or "uri" or "header"
+    ```
+
+    **Route Modes:**
+
+    **Wildcard:**
+    ```
+    URL: <sandbox-id>-<port>.example.com/path
+    ```
+
+    **URI:**
+    ```
+    URL: gateway.example.com/<sandbox-id>/<port>/path
+    ```
+
+    **Header:**
+    ```
+    URL: gateway.example.com
+    Header: OpenSandbox-Ingress-To: <sandbox-id>-<port>
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Kubernetes-Specific Issues
+
+<AccordionGroup>
+  <Accordion title="BatchSandbox stuck in Pending">
+    **Check status:**
+    ```bash
+    kubectl describe batchsandbox <name>
+    ```
+
+    **Common causes:**
+
+    **1. Pool capacity exceeded**
+    ```bash
+    # Check pool status
+    kubectl get pool <pool-name> -o yaml
+    
+    # Increase pool capacity
+    kubectl edit pool <pool-name>
+    # Update poolMax value
+    ```
+
+    **2. Resource quota exceeded**
+    ```bash
+    # Check namespace quotas
+    kubectl describe resourcequota -n opensandbox
+    
+    # Check node resources
+    kubectl top nodes
+    ```
+
+    **3. Image pull failures**
+    ```bash
+    # Check pod events
+    kubectl get events -n opensandbox --sort-by='.lastTimestamp'
+    
+    # Verify image pull secrets
+    kubectl get secrets -n opensandbox
+    ```
+  </Accordion>
+
+  <Accordion title="Pool not maintaining buffer">
+    **Diagnosis:**
+    ```bash
+    # Check pool status
+    kubectl get pool <pool-name> -o wide
+    
+    # View detailed status
+    kubectl describe pool <pool-name>
+    ```
+
+    **Solutions:**
+
+    **1. Controller not running**
+    ```bash
+    # Check controller pod
+    kubectl get pods -n opensandbox -l app=sandbox-controller
+    
+    # View controller logs
+    kubectl logs -n opensandbox -l app=sandbox-controller
+    ```
+
+    **2. Node resource constraints**
+    ```bash
+    # Check available node resources
+    kubectl describe nodes | grep -A 5 "Allocated resources"
+    ```
+
+    **3. Adjust pool settings**
+    ```yaml
+    capacitySpec:
+      bufferMin: 2
+      bufferMax: 10
+      poolMin: 5
+      poolMax: 20  # Increase if hitting limit
+    ```
+  </Accordion>
+
+  <Accordion title="Task execution failures">
+    **Symptoms:**
+    - Tasks stuck in running state
+    - Tasks fail immediately
+
+    **Diagnosis:**
+    ```bash
+    # Check task status
+    kubectl get batchsandbox <name> -o jsonpath='{.status.taskStats}'
+    
+    # Get task executor logs
+    kubectl logs <pod-name> -c task-executor
+    ```
+
+    **Solutions:**
+
+    **1. Missing task-executor sidecar**
+    ```yaml
+    # Pool template must include task-executor
+    spec:
+      template:
+        spec:
+          shareProcessNamespace: true  # Required
+          containers:
+          - name: sandbox-container
+            image: ubuntu:latest
+          - name: task-executor
+            image: opensandbox/task-executor:latest
+            securityContext:
+              capabilities:
+                add: ["SYS_PTRACE"]  # Required
+    ```
+
+    **2. Process namespace not shared**
+    ```yaml
+    spec:
+      shareProcessNamespace: true  # Must be set
+    ```
+
+    **3. Task command errors**
+    - Verify command exists in container
+    - Check command syntax
+    - Review task executor logs for errors
+  </Accordion>
+
+  <Accordion title="Log file not created">
+    **Solutions:**
+
+    **1. Check directory permissions**
+    ```bash
+    ls -la /var/log/sandbox-controller/
+    ls -ld /var/log/sandbox-controller/
+    ```
+
+    **2. Verify file logging enabled**
+    ```bash
+    # Controller must be started with
+    --enable-file-log=true
+    ```
+
+    **3. Create log directory**
+    ```bash
+    mkdir -p /var/log/sandbox-controller
+    chmod 755 /var/log/sandbox-controller
+    ```
+
+    **4. In Kubernetes**
+    ```yaml
+    initContainers:
+    - name: setup-log-dir
+      image: busybox
+      command: ['sh', '-c', 'mkdir -p /var/log/controller && chmod 755 /var/log/controller']
+      volumeMounts:
+      - name: log-volume
+        mountPath: /var/log/controller
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Debugging Techniques
+
+### Enable Debug Logging
+
+**Server:**
+```toml
+[server]
+log_level = "DEBUG"
+```
+
+**Kubernetes Controller:**
+```bash
+./controller --zap-log-level=debug
+```
+
+### Docker Debugging
+
+```python
+# In server code
+import logging
+logging.getLogger("docker").setLevel(logging.DEBUG)
+```
+
+### Interactive Debugging
+
+**VS Code/Cursor:**
+```json
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Python: FastAPI",
+      "type": "python",
+      "request": "launch",
+      "module": "src.main",
+      "justMyCode": false,
+      "env": {
+        "SANDBOX_CONFIG_PATH": "${workspaceFolder}/.sandbox.toml"
+      }
+    }
+  ]
+}
+```
+
+**Python Breakpoints:**
+```python
+breakpoint()  # Python 3.7+
+```
+
+### Collect Diagnostic Information
+
+```bash
+#!/bin/bash
+# Diagnostic collection script
+
+echo "=== OpenSandbox Diagnostics ==="
+
+# Server version
+echo "\n--- Server Version ---"
+opensandbox-server --version
+
+# Docker info
+echo "\n--- Docker Info ---"
+docker info
+
+# Server logs
+echo "\n--- Server Logs (last 50 lines) ---"
+tail -n 50 /var/log/opensandbox/server.log
+
+# Active sandboxes
+echo "\n--- Active Containers ---"
+docker ps | grep opensandbox
+
+# Network configuration
+echo "\n--- Network Config ---"
+cat ~/.sandbox.toml | grep -A 5 "\[docker\]"
+
+# Resource usage
+echo "\n--- System Resources ---"
+docker stats --no-stream
+```
+
+### Common Error Codes
+
+| Error Code | Description | Solution |
+|------------|-------------|----------|
+| `IMAGE_PULL_ERROR` | Failed to pull container image | Verify image exists and credentials |
+| `CONTAINER_STARTING` | Container is starting | Wait for transition to Running |
+| `RESOURCE_LIMIT_EXCEEDED` | Insufficient resources | Reduce limits or increase host capacity |
+| `NETWORK_ERROR` | Network configuration failed | Check network mode and routing |
+| `EXPIRED` | Sandbox TTL exceeded | Normal - automatic cleanup |
+| `INVALID_REQUEST_BODY` | Malformed API request | Check JSON syntax and required fields |
+| `FILE_NOT_FOUND` | File operation failed | Verify file path exists |
+
+## Getting Help
+
+<Card title="Report Issues" icon="github" href="https://github.com/alibaba/OpenSandbox/issues">
+  Submit bug reports and feature requests on GitHub
+</Card>
+
+### Before Reporting Issues
+
+1. **Check existing issues** - Search for similar problems
+2. **Collect diagnostics** - Use the diagnostic script above
+3. **Minimal reproduction** - Provide steps to reproduce
+4. **Version information** - Include server and runtime versions
+5. **Configuration** - Share relevant config (redact secrets)
+6. **Logs** - Include relevant log excerpts
+
+### Useful Debug Commands
+
+```bash
+# Check server health
+curl http://localhost:8080/health
+
+# List all sandboxes
+curl -H "OPEN-SANDBOX-API-KEY: key" http://localhost:8080/v1/sandboxes
+
+# Check Docker daemon
+docker info
+
+# View container logs
+docker logs <container-id>
+
+# Kubernetes events
+kubectl get events --sort-by='.lastTimestamp'
+
+# Pod logs
+kubectl logs <pod-name> --all-containers
+```

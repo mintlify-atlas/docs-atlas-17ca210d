@@ -1,0 +1,304 @@
+---
+title: SDK Overview
+description: Choose the right OpenSandbox SDK for your language and use case
+---
+
+OpenSandbox provides SDKs for multiple programming languages, enabling you to create, manage, and interact with secure sandbox environments from your preferred language.
+
+## Available SDKs
+
+### Sandbox SDKs
+
+Low-level SDKs for direct sandbox interaction:
+
+<CardGroup cols={2}>
+  <Card title="Python" icon="python" href="/sdks/python">
+    Full async/sync support with comprehensive file and command APIs
+  </Card>
+  <Card title="JavaScript/TypeScript" icon="js" href="/sdks/javascript">
+    Modern TypeScript SDK with Node.js and browser support
+  </Card>
+  <Card title="Kotlin/Java" icon="java" href="/sdks/kotlin">
+    Type-safe JVM SDK with builder pattern and try-with-resources
+  </Card>
+  <Card title="C#/.NET" icon="code" href="/sdks/csharp">
+    IAsyncDisposable SDK supporting .NET Standard 2.0+
+  </Card>
+</CardGroup>
+
+### Code Interpreter SDK
+
+<Card title="Code Interpreter" icon="terminal" href="/sdks/code-interpreter">
+  High-level SDK for executing Python, Java, Go, TypeScript code with state persistence
+</Card>
+
+## Choosing the Right SDK
+
+### Use Sandbox SDKs when you need:
+
+- **Direct control** over sandbox lifecycle (create, pause, resume, kill)
+- **File system operations** (read, write, search, delete)
+- **Command execution** with streaming output
+- **Network endpoint management**
+- **Custom health checks** and resource monitoring
+- **Administrative tasks** (listing/managing multiple sandboxes)
+
+### Use Code Interpreter SDK when you need:
+
+- **Code execution** in multiple languages (Python, Java, Go, TypeScript)
+- **State persistence** across executions (variables/imports retained)
+- **Multi-language contexts** in a single sandbox
+- **Simplified API** for running code snippets
+- **Pre-configured runtime environments**
+
+## SDK Comparison
+
+| Feature | Python | JavaScript | Kotlin | C# | Code Interpreter |
+|---------|--------|------------|--------|----|-----------------|
+| Async/Await | ✅ | ✅ | ❌ | ✅ | ✅ |
+| Sync API | ✅ | ❌ | ✅ | ❌ | ✅ |
+| Streaming | ✅ | ✅ | ✅ | ✅ | ✅ |
+| File Ops | ✅ | ✅ | ✅ | ✅ | Via Sandbox |
+| Browser Support | ❌ | ✅* | ❌ | ❌ | ❌ |
+| Multi-language Execution | ❌ | ❌ | ❌ | ❌ | ✅ |
+| State Persistence | Manual | Manual | Manual | Manual | ✅ |
+
+*Browser support with limitations (no streaming file uploads)
+
+## Common Capabilities
+
+All Sandbox SDKs share these core capabilities:
+
+### Lifecycle Management
+
+<Tabs>
+  <Tab title="Python">
+    ```python
+    # Create with timeout
+    sandbox = await Sandbox.create(
+        "ubuntu",
+        connection_config=config,
+        timeout=timedelta(minutes=30)
+    )
+    
+    # Renew expiration
+    await sandbox.renew(timedelta(minutes=30))
+    
+    # Pause/Resume
+    await sandbox.pause()
+    resumed = await Sandbox.resume(
+        sandbox_id=sandbox.id,
+        connection_config=config
+    )
+    ```
+  </Tab>
+  <Tab title="JavaScript">
+    ```ts
+    // Create with timeout
+    const sandbox = await Sandbox.create({
+      connectionConfig: config,
+      image: "ubuntu",
+      timeoutSeconds: 30 * 60
+    });
+    
+    // Renew expiration
+    await sandbox.renew(30 * 60);
+    
+    // Pause/Resume
+    await sandbox.pause();
+    const resumed = await sandbox.resume();
+    ```
+  </Tab>
+  <Tab title="Kotlin">
+    ```java
+    // Create with timeout
+    Sandbox sandbox = Sandbox.builder()
+        .connectionConfig(config)
+        .image("ubuntu")
+        .timeout(Duration.ofMinutes(30))
+        .build();
+    
+    // Renew expiration
+    sandbox.renew(Duration.ofMinutes(30));
+    
+    // Pause/Resume
+    sandbox.pause();
+    sandbox.resume();
+    ```
+  </Tab>
+  <Tab title="C#">
+    ```csharp
+    // Create with timeout
+    var sandbox = await Sandbox.CreateAsync(new SandboxCreateOptions
+    {
+        ConnectionConfig = config,
+        Image = "ubuntu",
+        TimeoutSeconds = 30 * 60
+    });
+    
+    // Renew expiration
+    await sandbox.RenewAsync(30 * 60);
+    
+    // Pause/Resume
+    await sandbox.PauseAsync();
+    var resumed = await sandbox.ResumeAsync();
+    ```
+  </Tab>
+</Tabs>
+
+### Command Execution
+
+<Tabs>
+  <Tab title="Python">
+    ```python
+    execution = await sandbox.commands.run("echo 'Hello!'")
+    print(execution.logs.stdout[0].text)
+    ```
+  </Tab>
+  <Tab title="JavaScript">
+    ```ts
+    const execution = await sandbox.commands.run("echo 'Hello!'");
+    console.log(execution.logs.stdout[0]?.text);
+    ```
+  </Tab>
+  <Tab title="Kotlin">
+    ```java
+    Execution execution = sandbox.commands().run("echo 'Hello!'");
+    System.out.println(execution.getLogs().getStdout().get(0).getText());
+    ```
+  </Tab>
+  <Tab title="C#">
+    ```csharp
+    var execution = await sandbox.Commands.RunAsync("echo 'Hello!'");
+    Console.WriteLine(execution.Logs.Stdout.FirstOrDefault()?.Text);
+    ```
+  </Tab>
+</Tabs>
+
+### File Operations
+
+<Tabs>
+  <Tab title="Python">
+    ```python
+    # Write
+    await sandbox.files.write_files([
+        WriteEntry(path="/tmp/file.txt", data="content", mode=644)
+    ])
+    
+    # Read
+    content = await sandbox.files.read_file("/tmp/file.txt")
+    
+    # Search
+    files = await sandbox.files.search(
+        SearchEntry(path="/tmp", pattern="*.txt")
+    )
+    ```
+  </Tab>
+  <Tab title="JavaScript">
+    ```ts
+    // Write
+    await sandbox.files.writeFiles([
+      { path: "/tmp/file.txt", data: "content", mode: 644 }
+    ]);
+    
+    // Read
+    const content = await sandbox.files.readFile("/tmp/file.txt");
+    
+    // Search
+    const files = await sandbox.files.search({
+      path: "/tmp",
+      pattern: "*.txt"
+    });
+    ```
+  </Tab>
+  <Tab title="Kotlin">
+    ```java
+    // Write
+    sandbox.files().write(List.of(
+        WriteEntry.builder()
+            .path("/tmp/file.txt")
+            .data("content")
+            .mode(644)
+            .build()
+    ));
+    
+    // Read
+    String content = sandbox.files().readFile("/tmp/file.txt", "UTF-8", null);
+    
+    // Search
+    List<EntryInfo> files = sandbox.files().search(
+        SearchEntry.builder()
+            .path("/tmp")
+            .pattern("*.txt")
+            .build()
+    );
+    ```
+  </Tab>
+  <Tab title="C#">
+    ```csharp
+    // Write
+    await sandbox.Files.WriteFilesAsync(new[] {
+        new WriteEntry { Path = "/tmp/file.txt", Data = "content", Mode = 644 }
+    });
+    
+    // Read
+    var content = await sandbox.Files.ReadFileAsync("/tmp/file.txt");
+    
+    // Search
+    var files = await sandbox.Files.SearchAsync(
+        new SearchEntry { Path = "/tmp", Pattern = "*.txt" }
+    );
+    ```
+  </Tab>
+</Tabs>
+
+## Installation
+
+Choose your language to get started:
+
+<Tabs>
+  <Tab title="Python">
+    ```bash
+    # Sandbox SDK
+    pip install opensandbox
+    
+    # Code Interpreter SDK
+    pip install opensandbox-code-interpreter
+    ```
+  </Tab>
+  <Tab title="JavaScript">
+    ```bash
+    npm install @alibaba-group/opensandbox
+    ```
+  </Tab>
+  <Tab title="Kotlin">
+    ```kotlin
+    // Gradle (Kotlin DSL)
+    dependencies {
+        implementation("com.alibaba.opensandbox:sandbox:{version}")
+    }
+    ```
+  </Tab>
+  <Tab title="C#">
+    ```bash
+    dotnet add package Alibaba.OpenSandbox
+    ```
+  </Tab>
+</Tabs>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Quick Start" icon="rocket" href="/quickstart">
+    Get started with your first sandbox in 5 minutes
+  </Card>
+  <Card title="API Reference" icon="book" href="/api-reference">
+    Explore detailed API documentation
+  </Card>
+  <Card title="Examples" icon="code" href="/examples">
+    Browse code examples and use cases
+  </Card>
+  <Card title="Configuration" icon="gear" href="/configuration">
+    Learn about connection and sandbox configuration
+  </Card>
+</CardGroup>

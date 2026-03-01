@@ -1,0 +1,344 @@
+---
+title: 'Ingress'
+description: 'HTTP/WebSocket reverse proxy for routing traffic to sandbox instances'
+icon: 'arrow-right-to-bracket'
+---
+
+## Overview
+
+The OpenSandbox Ingress is an HTTP/WebSocket reverse proxy that routes external traffic to sandbox instances running in a Kubernetes cluster. It watches sandbox Custom Resources (CRs) and dynamically routes requests based on sandbox IDs and ports.
+
+## Key Features
+
+- **Dynamic routing**: Routes to sandbox instances based on CR annotations or status
+- **Multi-provider support**: Works with BatchSandbox or AgentSandbox resources
+- **WebSocket support**: Full bidirectional WebSocket proxying
+- **Health checks**: Built-in `/status.ok` endpoint
+- **Flexible routing modes**: Header-based or URI path-based routing
+
+## Architecture
+
+### Component Discovery
+
+The ingress watches sandbox CRs in a target namespace:
+
+<Tabs>
+  <Tab title="BatchSandbox">
+    Reads endpoints from `sandbox.opensandbox.io/endpoints` annotation:
+    ```json
+    {
+      "8080": "10.0.1.5:8080",
+      "8888": "10.0.1.5:8888"
+    }
+    ```
+  </Tab>
+  <Tab title="AgentSandbox">
+    Reads `status.serviceFQDN` field:
+    ```yaml
+    status:
+      serviceFQDN: my-sandbox.opensandbox.svc.cluster.local
+    ```
+  </Tab>
+</Tabs>
+
+### Routing Modes
+
+The ingress supports two routing modes for discovering sandbox instances.
+
+#### Header Mode (default)
+
+Routes requests based on the `OpenSandbox-Ingress-To` header or the `Host` header.
+
+**Format:**
+- Header: `OpenSandbox-Ingress-To: <sandbox-id>-<port>`
+- Host: `<sandbox-id>-<port>.<domain>`
+
+**Example:**
+
+```bash
+# Using OpenSandbox-Ingress-To header
+curl -H "OpenSandbox-Ingress-To: my-sandbox-8080" \
+  https://ingress.opensandbox.io/api/users
+
+# Using Host header
+curl -H "Host: my-sandbox-8080.example.com" \
+  https://ingress.opensandbox.io/api/users
+```
+
+**Parsing Logic:**
+- Extracts sandbox ID and port from the format `<sandbox-id>-<port>`
+- The last segment after the last `-` is treated as the port
+- Everything before the last `-` is treated as the sandbox ID
+- The original request path is preserved and forwarded
+
+#### URI Mode
+
+Routes requests based on the URI path structure.
+
+**Format:**
+
+`/<sandbox-id>/<sandbox-port>/<path-to-request>`
+
+**Example:**
+
+```bash
+# Request to sandbox "my-sandbox" on port 8080, forwarding to /api/users
+curl https://ingress.opensandbox.io/my-sandbox/8080/api/users
+
+# WebSocket example
+wss://ingress.opensandbox.io/my-sandbox/8080/ws
+```
+
+**Parsing Logic:**
+- First path segment: sandbox ID
+- Second path segment: sandbox port
+- Remaining path: forwarded to the target sandbox as the request URI
+- If no remaining path is provided, defaults to `/`
+
+**Use Cases:**
+- When you cannot modify HTTP headers
+- When you need path-based routing
+- For simpler client configuration without custom headers
+
+## Quick Start
+
+```bash
+go run main.go \
+  --namespace <target-namespace> \
+  --provider-type <batchsandbox|agent-sandbox> \
+  --mode <header|uri> \
+  --port 28888 \
+  --log-level info
+```
+
+**Endpoints:**
+- `/` - Proxy endpoint
+- `/status.ok` - Health check
+
+## Configuration
+
+### Command-line Flags
+
+| Flag | Type | Default | Description |
+|------|------|---------|-------------|
+| `--namespace` | string | Required | Target Kubernetes namespace to watch |
+| `--provider-type` | string | `batchsandbox` | `batchsandbox` or `agent-sandbox` |
+| `--mode` | string | `header` | Routing mode: `header` or `uri` |
+| `--port` | int | `28888` | HTTP listen port |
+| `--log-level` | string | `info` | Log level: `debug`, `info`, `warn`, `error` |
+
+### Environment Variables
+
+```bash
+export KUBECONFIG=~/.kube/config  # Kubernetes config (out-of-cluster)
+export INGRESS_NAMESPACE=opensandbox
+export INGRESS_MODE=header
+```
+
+## Build
+
+### Local Build
+
+```bash
+cd components/ingress
+make build
+
+# Override build metadata if needed
+VERSION=1.2.3 \
+GIT_COMMIT=$(git rev-parse HEAD) \
+BUILD_TIME=$(date -u +"%Y-%m-%dT%H:%M:%SZ") \
+make build
+```
+
+### Docker Build
+
+```bash
+docker build \
+  --build-arg VERSION=$(git describe --tags --always --dirty) \
+  --build-arg GIT_COMMIT=$(git rev-parse HEAD) \
+  --build-arg BUILD_TIME=$(date -u +"%Y-%m-%dT%H:%M:%SZ") \
+  -t opensandbox/ingress:local .
+```
+
+### Multi-arch Build
+
+Use the provided build script for linux/amd64 and linux/arm64:
+
+```bash
+cd components/ingress
+TAG=local \
+VERSION=1.2.3 \
+GIT_COMMIT=abc \
+BUILD_TIME=2025-01-01T00:00:00Z \
+bash build.sh
+```
+
+## Deployment
+
+### Kubernetes Deployment
+
+```yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: opensandbox-ingress
+  namespace: opensandbox
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: opensandbox-ingress
+  template:
+    metadata:
+      labels:
+        app: opensandbox-ingress
+    spec:
+      serviceAccountName: opensandbox-ingress
+      containers:
+      - name: ingress
+        image: opensandbox/ingress:latest
+        args:
+        - --namespace=opensandbox
+        - --provider-type=batchsandbox
+        - --mode=header
+        - --port=28888
+        - --log-level=info
+        ports:
+        - containerPort: 28888
+          name: http
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: opensandbox-ingress
+  namespace: opensandbox
+spec:
+  selector:
+    app: opensandbox-ingress
+  ports:
+  - port: 80
+    targetPort: 28888
+  type: LoadBalancer
+```
+
+### RBAC Configuration
+
+```yaml
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: opensandbox-ingress
+  namespace: opensandbox
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: opensandbox-ingress
+  namespace: opensandbox
+rules:
+- apiGroups: ["opensandbox.io"]
+  resources: ["batchsandboxes", "agentsandboxes"]
+  verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: opensandbox-ingress
+  namespace: opensandbox
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: opensandbox-ingress
+subjects:
+- kind: ServiceAccount
+  name: opensandbox-ingress
+  namespace: opensandbox
+```
+
+## Runtime Requirements
+
+- Access to Kubernetes API (in-cluster or via KUBECONFIG)
+- **BatchSandbox mode**: CRs with `sandbox.opensandbox.io/endpoints` annotation containing Pod IPs
+- **AgentSandbox mode**: CRs with `status.serviceFQDN` populated
+
+## Error Handling
+
+The ingress provides clear HTTP status codes for different error conditions:
+
+| Error | HTTP Status | Description |
+|-------|-------------|-------------|
+| `ErrSandboxNotFound` | 404 | Sandbox resource does not exist |
+| `ErrSandboxNotReady` | 503 | Not enough replicas, missing endpoints, or invalid config |
+| Other errors | 502 | Kubernetes API errors, etc. |
+
+### Example Error Responses
+
+```bash
+# Sandbox not found
+curl -H "OpenSandbox-Ingress-To: nonexistent-8080" \
+  https://ingress.opensandbox.io/
+# HTTP 404: Sandbox not found
+
+# Sandbox not ready
+curl -H "OpenSandbox-Ingress-To: pending-sandbox-8080" \
+  https://ingress.opensandbox.io/
+# HTTP 503: Sandbox not ready
+```
+
+## Implementation Details
+
+### Header Mode Behavior
+
+1. **Routing key priority**: `OpenSandbox-Ingress-To` header first, otherwise Host parsing `<sandbox-name>-<port>.*`
+2. **Sandbox lookup**: Sandbox name extracted from request is used to query the sandbox CR via informer cache
+3. **Path preservation**: The original request path is preserved and forwarded to the target sandbox
+4. **Header stripping**: `OpenSandbox-Ingress-To` header is removed before proxying
+
+### URI Mode Behavior
+
+1. **Path parsing**: Routing information extracted from URI path: `/<sandbox-id>/<sandbox-port>/<path-to-request>`
+2. **Sandbox lookup**: The sandbox ID and port are extracted from the first two path segments
+3. **Path rewriting**: The remaining path is forwarded to the target sandbox as the request URI
+4. **Default path**: If no remaining path is provided, the request URI defaults to `/`
+
+### WebSocket Support
+
+- Forwards essential headers and `X-Forwarded-*` headers
+- Supports bidirectional communication
+- Proper connection upgrade handling
+- Compatible with both routing modes
+
+## Development
+
+### Directory Structure
+
+- `main.go`: Entry point and HTTP handlers
+- `pkg/proxy/`: HTTP/WebSocket proxy logic, sandbox endpoint resolution
+- `pkg/sandbox/`: Sandbox provider abstraction and BatchSandbox implementation
+- `version/`: Build metadata output (populated via ldflags)
+
+### Testing
+
+```bash
+cd components/ingress
+go test ./...
+```
+
+### Build Metadata
+
+The ingress prints build metadata at startup:
+
+```
+OpenSandbox Ingress
+Version: v1.2.3
+Commit: abc123def456
+Build Time: 2025-01-01T00:00:00Z
+Go Version: go1.24.0
+Platform: linux/amd64
+```
+
+## Support
+
+- **Issues**: [GitHub Issues](https://github.com/alibaba/OpenSandbox/issues)
+- **Documentation**: [OpenSandbox Docs](https://github.com/alibaba/OpenSandbox/wiki)
+- **Community**: [Discussions](https://github.com/alibaba/OpenSandbox/discussions)

@@ -1,0 +1,328 @@
+---
+title: 'Kubernetes Deployment'
+description: 'Deploy OpenSandbox on Kubernetes with the BatchSandbox controller for high-throughput sandbox provisioning'
+icon: 'dharmachakra'
+---
+
+The OpenSandbox Kubernetes Controller is a Kubernetes operator that provides **automated sandbox lifecycle management**, **resource pooling for fast provisioning**, **batch sandbox creation**, and **optional task orchestration** capabilities in Kubernetes clusters.
+
+## Key Features
+
+- **Flexible Sandbox Creation**: Choose between pooled and non-pooled sandbox creation modes
+- **Batch and Individual Delivery**: Support both single sandbox (for real-user interactions) and batch sandbox delivery (for high-throughput agentic-RL scenarios)
+- **Optional Task Scheduling**: Integrated task orchestration with optional shard task templates for heterogeneous task distribution
+- **Resource Pooling**: Maintain pre-warmed resource pools for rapid sandbox provisioning
+- **Comprehensive Monitoring**: Real-time status tracking of sandboxes and tasks
+
+## Performance Comparison
+
+When both use resource pools, the total time comparison for delivering 100 sandboxes:
+
+| Implementation | Time (seconds) |
+|---------------|----------------|
+| kubernetes-sigs/agent-sandbox (concurrency=1) | 76.35 |
+| kubernetes-sigs/agent-sandbox (concurrency=10) | 23.17 |
+| OpenSandbox BatchSandbox | **0.92** |
+
+The BatchSandbox controller achieves **O(1)** time complexity for batch delivery versus **O(N)** for traditional approaches.
+
+## Prerequisites
+
+- Kubernetes cluster v1.22.4+
+- `kubectl` v1.11.3+
+- Docker 17.03+
+- Go v1.24.0+ (for building from source)
+
+<Tip>
+  For local testing, use [kind](https://kind.sigs.k8s.io/) to create a Kubernetes cluster:
+  ```bash
+  kind create cluster
+  ```
+</Tip>
+
+## Installation
+
+### 1. Build and Push Images
+
+The controller requires two images: the controller and the task-executor.
+
+```bash
+# Build and push the controller image
+make docker-build docker-push IMG=<registry>/opensandbox-controller:tag
+
+# Build and push the task-executor image
+make docker-build-task-executor docker-push-task-executor \
+  TASK_EXECUTOR_IMG=<registry>/opensandbox-task-executor:tag
+```
+
+<Note>
+  If using kind, load images into the cluster:
+  ```bash
+  kind load docker-image <registry>/opensandbox-controller:tag
+  kind load docker-image <registry>/opensandbox-task-executor:tag
+  ```
+</Note>
+
+### 2. Install CRDs
+
+```bash
+make install
+```
+
+### 3. Deploy the Controller
+
+```bash
+make deploy IMG=<registry>/opensandbox-controller:tag \
+  TASK_EXECUTOR_IMG=<registry>/opensandbox-task-executor:tag
+```
+
+## Basic Usage
+
+### Non-Pooled Sandbox
+
+Create a simple batch of sandboxes without resource pooling:
+
+```yaml
+apiVersion: sandbox.opensandbox.io/v1alpha1
+kind: BatchSandbox
+metadata:
+  name: basic-batch-sandbox
+  namespace: default
+spec:
+  replicas: 2
+  template:
+    spec:
+      containers:
+      - name: sandbox-container
+        image: nginx:latest
+        ports:
+        - containerPort: 80
+```
+
+Apply and monitor:
+
+```bash
+# Create the sandbox
+kubectl apply -f basic-batch-sandbox.yaml
+
+# Check status
+kubectl get batchsandbox basic-batch-sandbox -o wide
+```
+
+Expected output:
+```
+NAME                   DESIRED   TOTAL   ALLOCATED   READY   EXPIRE   AGE
+basic-batch-sandbox    2         2       2           2       <none>   5m
+```
+
+### Retrieve Sandbox Endpoints
+
+```bash
+kubectl get batchsandbox basic-batch-sandbox \
+  -o jsonpath='{.metadata.annotations.sandbox\.opensandbox\.io/endpoints}'
+```
+
+## Advanced Usage with Resource Pooling
+
+### Step 1: Create a Pool
+
+Resource pools maintain pre-warmed sandboxes for instant provisioning:
+
+```yaml pool.yaml
+apiVersion: sandbox.opensandbox.io/v1alpha1
+kind: Pool
+metadata:
+  name: example-pool
+  namespace: opensandbox
+spec:
+  template:
+    metadata:
+      labels:
+        app: example
+    spec:
+      volumes:
+        - name: sandbox-storage
+          emptyDir: {}
+        - name: opensandbox-bin
+          emptyDir: {}
+      initContainers:
+        - name: execd-installer
+          image: opensandbox/execd:v1.0.6
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              cp ./execd /opt/opensandbox/bin/execd && 
+              cp ./bootstrap.sh /opt/opensandbox/bin/bootstrap.sh &&
+              chmod +x /opt/opensandbox/bin/execd &&
+              chmod +x /opt/opensandbox/bin/bootstrap.sh
+          volumeMounts:
+            - name: opensandbox-bin
+              mountPath: /opt/opensandbox/bin
+      containers:
+        - name: sandbox
+          image: opensandbox/code-interpreter:v1.0.1
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              /opt/opensandbox/bin/execd -listen-addr=0.0.0.0:5758
+          env:
+          - name: SANDBOX_MAIN_CONTAINER
+            value: main
+          volumeMounts:
+            - name: sandbox-storage
+              mountPath: /var/lib/sandbox
+            - name: opensandbox-bin
+              mountPath: /opt/opensandbox/bin
+  capacitySpec:
+    bufferMax: 10    # Maximum pre-warmed sandboxes
+    bufferMin: 2     # Minimum pre-warmed sandboxes
+    poolMax: 20      # Maximum total capacity
+    poolMin: 5       # Minimum total capacity
+```
+
+```bash
+kubectl apply -f pool.yaml
+```
+
+### Step 2: Create Pooled Sandboxes
+
+```yaml pooled-sandbox.yaml
+apiVersion: sandbox.opensandbox.io/v1alpha1
+kind: BatchSandbox
+metadata:
+  name: pooled-batch-sandbox
+  namespace: opensandbox
+spec:
+  replicas: 3
+  poolRef: example-pool  # Reference to the pool
+```
+
+```bash
+kubectl apply -f pooled-sandbox.yaml
+```
+
+## Task Orchestration
+
+Execute heterogeneous tasks across sandboxes using `shardTaskPatches`:
+
+```yaml task-sandbox.yaml
+apiVersion: sandbox.opensandbox.io/v1alpha1
+kind: BatchSandbox
+metadata:
+  name: task-batch-sandbox
+  namespace: opensandbox
+spec:
+  replicas: 2
+  poolRef: example-pool
+  taskTemplate:
+    spec:
+      process:
+        command: ["echo"]
+        args: ["Default task"]
+  shardTaskPatches:
+  - spec:
+      process:
+        command: ["python"]
+        args: ["-m", "http.server", "8080"]
+  - spec:
+      process:
+        command: ["sleep"]
+        args: ["3600"]
+        env:
+        - name: CUSTOM_VAR
+          value: "custom-value"
+```
+
+```bash
+kubectl apply -f task-sandbox.yaml
+
+# Monitor task execution
+kubectl get batchsandbox task-batch-sandbox -o wide
+```
+
+Expected output:
+```
+NAME                  DESIRED TOTAL ALLOCATED READY TASK_RUNNING TASK_SUCCEED TASK_FAILED AGE
+task-batch-sandbox    2       2     2         2     0            2            0           5m
+```
+
+## Monitoring and Cleanup
+
+### Check Pool Status
+
+```bash
+kubectl get pools
+kubectl describe pool example-pool
+```
+
+### Check BatchSandbox Status
+
+```bash
+kubectl get batchsandboxes
+kubectl describe batchsandbox task-batch-sandbox
+```
+
+### Delete Resources
+
+```bash
+# Delete BatchSandbox (automatically stops tasks)
+kubectl delete batchsandbox task-batch-sandbox
+
+# Delete Pool
+kubectl delete pool example-pool
+```
+
+<Warning>
+  When deleting a BatchSandbox with running tasks, the controller automatically stops all tasks before deletion.
+</Warning>
+
+## Configuring OpenSandbox Server
+
+To use the Kubernetes controller with OpenSandbox server:
+
+```toml ~/.sandbox.toml
+[runtime]
+type = "kubernetes"
+execd_image = "opensandbox/execd:v1.0.6"
+
+[kubernetes]
+namespace = "opensandbox"
+# kubeconfig_path = "/path/to/kubeconfig"  # Optional if running in-cluster
+workload_provider = "agent-sandbox"  # or "batch-sandbox"
+
+[agent_sandbox]
+shutdown_policy = "Delete"
+```
+
+Start the server:
+
+```bash
+opensandbox-server
+```
+
+## Architecture
+
+### BatchSandbox vs kubernetes-sigs/agent-sandbox
+
+BatchSandbox complements agent-sandbox with:
+
+1. **Batch Semantics**: Significantly improves throughput for RL training scenarios
+2. **Task Scheduling**: Enables differentiated sandbox delivery (e.g., process injection)
+
+**Write Operations for 100 Sandboxes:**
+
+| Component | Operations |
+|-----------|------------|
+| agent-sandbox | 500 (5 per sandbox) |
+| BatchSandbox | **3** (batch-level only) |
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Batch Sandboxes" icon="layer-group" href="/examples/batch-sandboxes">
+    Learn about batch sandbox patterns
+  </Card>
+  <Card title="RL Training" icon="brain" href="/examples/rl-training">
+    Use sandboxes for RL training workflows
+  </Card>
+</CardGroup>

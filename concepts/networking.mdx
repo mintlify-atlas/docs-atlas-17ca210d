@@ -1,0 +1,474 @@
+---
+title: Networking
+description: Learn how OpenSandbox handles ingress routing and egress control for sandboxes
+icon: network-wired
+---
+
+OpenSandbox provides comprehensive networking capabilities for sandboxes, including **ingress routing** to access services running inside sandboxes and **egress control** to restrict outbound network access.
+
+## Architecture
+
+OpenSandbox networking consists of two main components:
+
+<CardGroup cols={2}>
+  <Card title="Ingress Gateway" icon="arrow-right-to-bracket">
+    Routes external traffic to sandbox services via HTTP/HTTPS endpoints
+  </Card>
+  <Card title="Egress Control" icon="arrow-right-from-bracket">
+    Enforces network policies to restrict outbound traffic from sandboxes
+  </Card>
+</CardGroup>
+
+## Ingress routing
+
+The **Ingress Gateway** provides HTTP/HTTPS access to services running inside sandboxes.
+
+### How it works
+
+1. **Service binding**: When you create a sandbox, you can expose ports
+2. **Dynamic routing**: The gateway creates routes based on sandbox ID and port
+3. **Endpoint generation**: Get public URLs via `sandbox.get_endpoint(port)`
+4. **Traffic forwarding**: Requests are proxied to the sandbox container
+
+### Getting endpoints
+
+Retrieve the public URL for a service running in a sandbox:
+
+<Tabs>
+  <Tab title="Python">
+    ```python
+    # Start a web server in the sandbox
+    await sandbox.commands.run_background(
+        "python -m http.server 8000",
+        working_dir="/workspace"
+    )
+
+    # Get the public endpoint
+    endpoint = await sandbox.get_endpoint(8000)
+    print(f"Access at: {endpoint}")
+    # https://api.opensandbox.io/sandboxes/sb-abc123/port/8000
+    ```
+  </Tab>
+  <Tab title="JavaScript">
+    ```javascript
+    // Start a web server
+    await sandbox.commands.runBackground(
+      'python -m http.server 8000',
+      { workingDir: '/workspace' }
+    );
+
+    // Get endpoint
+    const endpoint = await sandbox.getEndpoint(8000);
+    console.log(`Access at: ${endpoint}`);
+    ```
+  </Tab>
+  <Tab title="Kotlin">
+    ```kotlin
+    // Start web server
+    sandbox.commands.runBackground(
+        "python -m http.server 8000",
+        workingDir = "/workspace"
+    )
+
+    // Get endpoint
+    val endpoint = sandbox.getEndpoint(8000)
+    println("Access at: $endpoint")
+    ```
+  </Tab>
+</Tabs>
+
+### Routing modes
+
+The Ingress Gateway supports multiple routing strategies:
+
+<Tabs>
+  <Tab title="URI-based routing">
+    Routes based on URL path:
+    
+    **Format**: `https://domain/sandboxes/{sandboxId}/port/{port}`
+    
+    **Configuration**:
+    ```toml
+    [ingress]
+    mode = "uri"
+    domain = "api.opensandbox.io"
+    ```
+    
+    **Example**: `https://api.opensandbox.io/sandboxes/sb-123/port/8000`
+  </Tab>
+  <Tab title="Header-based routing">
+    Routes based on HTTP headers:
+    
+    **Required headers**:
+    - `X-OpenSandbox-Id: {sandboxId}`
+    - `X-OpenSandbox-Port: {port}`
+    
+    **Configuration**:
+    ```toml
+    [ingress]
+    mode = "header"
+    domain = "api.opensandbox.io"
+    ```
+    
+    **Example**:
+    ```bash
+    curl -H "X-OpenSandbox-Id: sb-123" \
+         -H "X-OpenSandbox-Port: 8000" \
+         https://api.opensandbox.io
+    ```
+  </Tab>
+  <Tab title="Wildcard subdomain">
+    Routes based on subdomain:
+    
+    **Format**: `https://{sandboxId}.{domain}`
+    
+    **Configuration**:
+    ```toml
+    [ingress]
+    mode = "wildcard"
+    domain = "sandboxes.opensandbox.io"
+    ```
+    
+    **Example**: `https://sb-123.sandboxes.opensandbox.io`
+    
+    <Warning>
+      Requires wildcard DNS configuration (`*.sandboxes.opensandbox.io`)
+    </Warning>
+  </Tab>
+</Tabs>
+
+### WebSocket support
+
+The Ingress Gateway supports WebSocket connections for real-time applications:
+
+```python
+# Start a WebSocket server
+await sandbox.commands.run_background(
+    "python websocket_server.py",
+    working_dir="/workspace"
+)
+
+endpoint = await sandbox.get_endpoint(8080)
+# ws://api.opensandbox.io/sandboxes/sb-123/port/8080
+```
+
+**Use cases:**
+- VNC access for desktop environments
+- Real-time collaboration tools
+- Live terminal sessions
+- Interactive debugging
+
+## Egress control
+
+The **Egress Control** component restricts outbound network access from sandboxes using FQDN-based policies.
+
+### Network policies
+
+Define allowed or denied domains when creating a sandbox:
+
+<Tabs>
+  <Tab title="Deny by default">
+    ```python
+    from opensandbox.models import NetworkPolicy, EgressRule
+
+    sandbox = await Sandbox.create(
+        "python:3.11",
+        network_policy=NetworkPolicy(
+            egress=[
+                EgressRule(domain="*.pypi.org", action="allow"),
+                EgressRule(domain="github.com", action="allow"),
+                EgressRule(domain="*", action="deny")
+            ]
+        )
+    )
+    ```
+    
+    This sandbox can only access PyPI and GitHub.
+  </Tab>
+  <Tab title="Allow by default">
+    ```python
+    sandbox = await Sandbox.create(
+        "python:3.11",
+        network_policy=NetworkPolicy(
+            egress=[
+                EgressRule(domain="*.internal.company.com", action="deny"),
+                EgressRule(domain="*", action="allow")
+            ]
+        )
+    )
+    ```
+    
+    This sandbox can access everything except internal company domains.
+  </Tab>
+</Tabs>
+
+### Policy rules
+
+<ParamField path="domain" type="string" required>
+  Domain pattern with wildcard support:
+  - `example.com` - Exact match
+  - `*.example.com` - All subdomains
+  - `*` - All domains (catch-all)
+</ParamField>
+
+<ParamField path="action" type="string" required>
+  Action to take: `allow` or `deny`
+</ParamField>
+
+<ParamField path="priority" type="number">
+  Rule priority (lower = higher priority). Defaults to order in array.
+</ParamField>
+
+### How egress control works
+
+The egress sidecar intercepts DNS queries and network traffic:
+
+<Steps>
+  <Step title="DNS interception">
+    The sidecar runs a DNS proxy that intercepts all DNS queries from the sandbox
+  </Step>
+  <Step title="Policy evaluation">
+    Each DNS query is matched against the network policy rules
+  </Step>
+  <Step title="Traffic filtering">
+    Allowed domains are resolved normally; denied domains return NXDOMAIN
+  </Step>
+  <Step title="nftables enforcement">
+    IP-based rules are configured using nftables for additional enforcement
+  </Step>
+</Steps>
+
+### Deployment modes
+
+<Tabs>
+  <Tab title="Docker sidecar">
+    The egress sidecar runs as a separate container sharing the network namespace:
+    
+    ```toml
+    [docker]
+    enable_egress_sidecar = true
+    egress_sidecar_image = "opensandbox/egress:v1.0.0"
+    ```
+    
+    **Resource impact**:
+    - CPU: ~10m (0.01 core)
+    - Memory: ~50 MiB
+  </Tab>
+  <Tab title="Kubernetes DaemonSet">
+    Deploy as a DaemonSet for cluster-wide egress control:
+    
+    ```yaml
+    apiVersion: apps/v1
+    kind: DaemonSet
+    metadata:
+      name: opensandbox-egress
+    spec:
+      selector:
+        matchLabels:
+          app: opensandbox-egress
+      template:
+        spec:
+          hostNetwork: true
+          containers:
+          - name: egress
+            image: opensandbox/egress:v1.0.0
+    ```
+  </Tab>
+</Tabs>
+
+## Network isolation
+
+### Docker networking modes
+
+<Tabs>
+  <Tab title="Host mode">
+    Sandbox uses the host's network stack:
+    
+    ```toml
+    [docker]
+    network_mode = "host"
+    ```
+    
+    **Pros**: Better performance, simpler port access
+    **Cons**: No network isolation, port conflicts
+    
+    **Use case**: Single-tenant environments, development
+  </Tab>
+  <Tab title="Bridge mode">
+    Sandbox uses Docker bridge networking:
+    
+    ```toml
+    [docker]
+    network_mode = "bridge"
+    ```
+    
+    **Pros**: Network isolation, no port conflicts
+    **Cons**: Requires ingress gateway for external access
+    
+    **Use case**: Multi-tenant production environments
+  </Tab>
+</Tabs>
+
+### Kubernetes network policies
+
+In Kubernetes, use NetworkPolicy for pod-level isolation:
+
+```yaml
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: sandbox-isolation
+spec:
+  podSelector:
+    matchLabels:
+      sandbox.opensandbox.io/managed: "true"
+  policyTypes:
+  - Ingress
+  - Egress
+  ingress:
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          name: opensandbox-system
+  egress:
+  - to:
+    - namespaceSelector: {}
+    ports:
+    - protocol: TCP
+      port: 53  # DNS
+```
+
+## Security considerations
+
+<Warning>
+  **Important**: Network policies are enforced at the DNS and IP layers. Sandboxes with root access can potentially bypass these restrictions. For maximum security:
+  
+  1. Drop Linux capabilities (CAP_NET_RAW, CAP_NET_ADMIN)
+  2. Use read-only root filesystems
+  3. Apply seccomp profiles
+  4. Run containers as non-root users
+</Warning>
+
+### Recommended security configuration
+
+```python
+from opensandbox.models import NetworkPolicy, SecurityContext
+
+sandbox = await Sandbox.create(
+    "python:3.11",
+    network_policy=NetworkPolicy(
+        egress=[
+            EgressRule(domain="*.pypi.org", action="allow"),
+            EgressRule(domain="*", action="deny")
+        ]
+    ),
+    security_context=SecurityContext(
+        capabilities_drop=["NET_RAW", "NET_ADMIN"],
+        read_only_root_filesystem=True,
+        run_as_non_root=True
+    )
+)
+```
+
+## Common use cases
+
+<AccordionGroup>
+  <Accordion title="Web application testing">
+    Expose web apps for manual or automated testing:
+    
+    ```python
+    await sandbox.commands.run_background("npm start")
+    endpoint = await sandbox.get_endpoint(3000)
+    # Run Playwright tests against endpoint
+    ```
+  </Accordion>
+  
+  <Accordion title="Remote development">
+    Access VS Code Server or Jupyter Lab:
+    
+    ```python
+    await sandbox.commands.run_background(
+        "code-server --bind-addr 0.0.0.0:8080"
+    )
+    endpoint = await sandbox.get_endpoint(8080)
+    # Open in browser
+    ```
+  </Accordion>
+  
+  <Accordion title="Restricted AI code execution">
+    Allow AI-generated code to install packages but block other network access:
+    
+    ```python
+    sandbox = await Sandbox.create(
+        "python:3.11",
+        network_policy=NetworkPolicy(
+            egress=[
+                EgressRule(domain="pypi.org", action="allow"),
+                EgressRule(domain="*.pypi.org", action="allow"),
+                EgressRule(domain="*", action="deny")
+            ]
+        )
+    )
+    ```
+  </Accordion>
+  
+  <Accordion title="VNC desktop access">
+    Access full desktop environments via VNC:
+    
+    ```python
+    await sandbox.commands.run_background(
+        "vncserver -geometry 1920x1080 -depth 24"
+    )
+    endpoint = await sandbox.get_endpoint(5900)
+    # Connect with VNC client
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="Cannot access sandbox endpoint">
+    **Symptoms**: 502 Bad Gateway or connection refused
+    
+    **Solutions**:
+    1. Verify the service is running: `await sandbox.commands.run("curl localhost:8000")`
+    2. Check the port number is correct
+    3. Ensure the service binds to `0.0.0.0`, not `127.0.0.1`
+    4. Wait for service startup (add health check)
+  </Accordion>
+  
+  <Accordion title="Egress policy not working">
+    **Symptoms**: Sandbox can access blocked domains
+    
+    **Solutions**:
+    1. Verify egress sidecar is enabled in config
+    2. Check sidecar container is running: `docker ps`
+    3. Review policy rule order (first match wins)
+    4. Drop NET_RAW capability to prevent raw socket access
+  </Accordion>
+  
+  <Accordion title="WebSocket connections fail">
+    **Symptoms**: WebSocket upgrade fails
+    
+    **Solutions**:
+    1. Ensure ingress gateway supports WebSocket (OpenSandbox does)
+    2. Check for proxies that don't support WebSocket
+    3. Verify the application listens on the correct port
+  </Accordion>
+</AccordionGroup>
+
+<CardGroup cols={2}>
+  <Card title="Ingress component" icon="arrow-right-to-bracket" href="/components/ingress">
+    Deep dive into ingress gateway architecture
+  </Card>
+  <Card title="Egress component" icon="arrow-right-from-bracket" href="/components/egress">
+    Learn about egress control implementation
+  </Card>
+  <Card title="Security" icon="shield" href="/deployment/security">
+    Security best practices for networking
+  </Card>
+  <Card title="Configuration" icon="gear" href="/deployment/configuration">
+    Configure networking options
+  </Card>
+</CardGroup>

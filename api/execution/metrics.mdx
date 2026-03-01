@@ -1,0 +1,507 @@
+---
+title: "System Metrics"
+description: "Monitor CPU and memory usage in real-time"
+---
+
+The Metrics API provides real-time monitoring of system resource utilization within the sandbox environment. Track CPU usage, memory consumption, and other system metrics either as one-time snapshots or continuous streams.
+
+## Get System Metrics
+
+<RequestExample>
+```bash cURL
+curl -X GET http://localhost:44772/metrics \
+  -H "X-EXECD-ACCESS-TOKEN: your-token"
+```
+
+```python Python
+import requests
+
+response = requests.get(
+    "http://localhost:44772/metrics",
+    headers={"X-EXECD-ACCESS-TOKEN": "your-token"}
+)
+
+metrics = response.json()
+print(f"CPU Usage: {metrics['cpu_used_pct']:.1f}%")
+print(f"Memory Used: {metrics['mem_used_mib']:.1f} MiB / {metrics['mem_total_mib']:.1f} MiB")
+print(f"CPU Cores: {metrics['cpu_count']}")
+```
+</RequestExample>
+
+Retrieves current system resource metrics including CPU usage percentage, CPU core count, total memory, used memory, and timestamp. Provides a snapshot of system resource utilization at the time of request.
+
+<ResponseField name="cpu_count" type="number">
+  Number of CPU cores available
+</ResponseField>
+
+<ResponseField name="cpu_used_pct" type="number">
+  CPU usage percentage (0-100)
+</ResponseField>
+
+<ResponseField name="mem_total_mib" type="number">
+  Total memory in MiB (Mebibytes)
+</ResponseField>
+
+<ResponseField name="mem_used_mib" type="number">
+  Used memory in MiB (Mebibytes)
+</ResponseField>
+
+<ResponseField name="timestamp" type="integer">
+  Timestamp when metrics were collected (Unix milliseconds)
+</ResponseField>
+
+<ResponseExample>
+```json 200
+{
+  "cpu_count": 4.0,
+  "cpu_used_pct": 45.5,
+  "mem_total_mib": 8192.0,
+  "mem_used_mib": 4096.0,
+  "timestamp": 1700000000000
+}
+```
+
+```json 500
+{
+  "code": "RUNTIME_ERROR",
+  "message": "error collecting metrics"
+}
+```
+</ResponseExample>
+
+---
+
+## Watch System Metrics
+
+<RequestExample>
+```bash cURL
+curl -X GET http://localhost:44772/metrics/watch \
+  -H "X-EXECD-ACCESS-TOKEN: your-token"
+```
+
+```python Python
+import requests
+import json
+
+url = "http://localhost:44772/metrics/watch"
+headers = {"X-EXECD-ACCESS-TOKEN": "your-token"}
+
+response = requests.get(url, headers=headers, stream=True)
+
+for line in response.iter_lines():
+    if line:
+        decoded = line.decode('utf-8')
+        if decoded.startswith('data: '):
+            metrics = json.loads(decoded[6:])
+            print(f"[{metrics['timestamp']}] CPU: {metrics['cpu_used_pct']:.1f}%, "
+                  f"Memory: {metrics['mem_used_mib']:.0f}/{metrics['mem_total_mib']:.0f} MiB")
+```
+
+```python Python Dashboard
+import requests
+import json
+import time
+from collections import deque
+
+class MetricsMonitor:
+    def __init__(self, url, token, history_size=60):
+        self.url = url
+        self.headers = {"X-EXECD-ACCESS-TOKEN": token}
+        self.cpu_history = deque(maxlen=history_size)
+        self.mem_history = deque(maxlen=history_size)
+    
+    def start(self):
+        response = requests.get(
+            self.url,
+            headers=self.headers,
+            stream=True
+        )
+        
+        for line in response.iter_lines():
+            if line:
+                decoded = line.decode('utf-8')
+                if decoded.startswith('data: '):
+                    metrics = json.loads(decoded[6:])
+                    self.process_metrics(metrics)
+    
+    def process_metrics(self, metrics):
+        self.cpu_history.append(metrics['cpu_used_pct'])
+        mem_pct = (metrics['mem_used_mib'] / metrics['mem_total_mib']) * 100
+        self.mem_history.append(mem_pct)
+        
+        avg_cpu = sum(self.cpu_history) / len(self.cpu_history)
+        avg_mem = sum(self.mem_history) / len(self.mem_history)
+        
+        print(f"\rCPU: {metrics['cpu_used_pct']:.1f}% (avg: {avg_cpu:.1f}%) | "
+              f"Mem: {mem_pct:.1f}% (avg: {avg_mem:.1f}%)", end='')
+
+# Usage
+monitor = MetricsMonitor(
+    "http://localhost:44772/metrics/watch",
+    "your-token"
+)
+monitor.start()
+```
+</RequestExample>
+
+Streams system resource metrics in real-time using Server-Sent Events (SSE). Updates are sent every second, providing continuous monitoring of CPU usage, memory usage, and other system metrics. The connection remains open until the client disconnects.
+
+<Note>
+The watch endpoint sends metrics updates every second. The connection is persistent and will continue streaming until the client closes it.
+</Note>
+
+<ResponseField name="cpu_count" type="number">
+  Number of CPU cores available
+</ResponseField>
+
+<ResponseField name="cpu_used_pct" type="number">
+  CPU usage percentage (0-100)
+</ResponseField>
+
+<ResponseField name="mem_total_mib" type="number">
+  Total memory in MiB (Mebibytes)
+</ResponseField>
+
+<ResponseField name="mem_used_mib" type="number">
+  Used memory in MiB (Mebibytes)
+</ResponseField>
+
+<ResponseField name="timestamp" type="integer">
+  Timestamp when metrics were collected (Unix milliseconds)
+</ResponseField>
+
+<ResponseExample>
+```text SSE Stream
+data: {"cpu_count":4.0,"cpu_used_pct":45.5,"mem_total_mib":8192.0,"mem_used_mib":4096.0,"timestamp":1700000000000}
+
+data: {"cpu_count":4.0,"cpu_used_pct":46.2,"mem_total_mib":8192.0,"mem_used_mib":4102.0,"timestamp":1700000001000}
+
+data: {"cpu_count":4.0,"cpu_used_pct":44.8,"mem_total_mib":8192.0,"mem_used_mib":4098.0,"timestamp":1700000002000}
+
+```
+</ResponseExample>
+
+## Understanding the Metrics
+
+### CPU Metrics
+
+**cpu_count**
+- Number of CPU cores available to the sandbox
+- This is typically the physical core count, but may be limited by container resource constraints
+- Does not change during runtime
+
+**cpu_used_pct**
+- Percentage of CPU resources currently in use (0-100)
+- Averaged across all cores
+- Example: 50% on a 4-core system means ~2 cores worth of work
+
+### Memory Metrics
+
+**mem_total_mib**
+- Total memory available to the sandbox in Mebibytes (MiB)
+- 1 MiB = 1,048,576 bytes (1024²)
+- This is the memory limit set for the container
+
+**mem_used_mib**
+- Currently used memory in MiB
+- Includes active processes, cached data, and buffers
+- When this approaches `mem_total_mib`, the system may start swapping or OOM
+
+### Timestamp
+
+**timestamp**
+- Unix timestamp in milliseconds when the metrics were collected
+- Can be converted to datetime: `datetime.fromtimestamp(timestamp / 1000)`
+- Useful for correlating metrics with events
+
+## Use Cases
+
+### Resource Monitoring Dashboard
+
+Build a real-time dashboard to monitor sandbox health:
+
+```python
+import requests
+import json
+from datetime import datetime
+
+def monitor_resources(url, token, alert_cpu=80, alert_mem=90):
+    headers = {"X-EXECD-ACCESS-TOKEN": token}
+    response = requests.get(url, headers=headers, stream=True)
+    
+    for line in response.iter_lines():
+        if line and line.decode('utf-8').startswith('data: '):
+            metrics = json.loads(line.decode('utf-8')[6:])
+            
+            mem_pct = (metrics['mem_used_mib'] / metrics['mem_total_mib']) * 100
+            timestamp = datetime.fromtimestamp(metrics['timestamp'] / 1000)
+            
+            # Check for alerts
+            if metrics['cpu_used_pct'] > alert_cpu:
+                print(f"[{timestamp}] ⚠️  HIGH CPU: {metrics['cpu_used_pct']:.1f}%")
+            
+            if mem_pct > alert_mem:
+                print(f"[{timestamp}] ⚠️  HIGH MEMORY: {mem_pct:.1f}%")
+
+monitor_resources(
+    "http://localhost:44772/metrics/watch",
+    "your-token",
+    alert_cpu=80,
+    alert_mem=90
+)
+```
+
+### Performance Testing
+
+Collect metrics during load tests to understand resource consumption:
+
+```python
+import requests
+import json
+import threading
+import time
+from statistics import mean, stdev
+
+class MetricsCollector:
+    def __init__(self, url, token):
+        self.url = url
+        self.headers = {"X-EXECD-ACCESS-TOKEN": token}
+        self.cpu_samples = []
+        self.mem_samples = []
+        self.running = False
+    
+    def start(self):
+        self.running = True
+        thread = threading.Thread(target=self._collect)
+        thread.daemon = True
+        thread.start()
+        return self
+    
+    def stop(self):
+        self.running = False
+        return self.get_stats()
+    
+    def _collect(self):
+        response = requests.get(self.url, headers=self.headers, stream=True)
+        for line in response.iter_lines():
+            if not self.running:
+                break
+            if line and line.decode('utf-8').startswith('data: '):
+                metrics = json.loads(line.decode('utf-8')[6:])
+                self.cpu_samples.append(metrics['cpu_used_pct'])
+                mem_pct = (metrics['mem_used_mib'] / metrics['mem_total_mib']) * 100
+                self.mem_samples.append(mem_pct)
+    
+    def get_stats(self):
+        return {
+            "cpu": {
+                "mean": mean(self.cpu_samples),
+                "max": max(self.cpu_samples),
+                "min": min(self.cpu_samples),
+                "stdev": stdev(self.cpu_samples) if len(self.cpu_samples) > 1 else 0
+            },
+            "memory": {
+                "mean": mean(self.mem_samples),
+                "max": max(self.mem_samples),
+                "min": min(self.mem_samples),
+                "stdev": stdev(self.mem_samples) if len(self.mem_samples) > 1 else 0
+            }
+        }
+
+# Usage
+collector = MetricsCollector(
+    "http://localhost:44772/metrics/watch",
+    "your-token"
+).start()
+
+# Run your load test here
+time.sleep(60)
+
+# Stop collecting and get stats
+stats = collector.stop()
+print(f"CPU - Mean: {stats['cpu']['mean']:.1f}%, Max: {stats['cpu']['max']:.1f}%")
+print(f"Memory - Mean: {stats['memory']['mean']:.1f}%, Max: {stats['memory']['max']:.1f}%")
+```
+
+### Auto-scaling Trigger
+
+Use metrics to trigger auto-scaling decisions:
+
+```python
+import requests
+import json
+from collections import deque
+
+class AutoScaler:
+    def __init__(self, url, token, window_size=10):
+        self.url = url
+        self.headers = {"X-EXECD-ACCESS-TOKEN": token}
+        self.cpu_window = deque(maxlen=window_size)
+        self.mem_window = deque(maxlen=window_size)
+    
+    def monitor(self, scale_up_cpu=70, scale_down_cpu=30,
+                scale_up_mem=80, scale_down_mem=40):
+        response = requests.get(self.url, headers=self.headers, stream=True)
+        
+        for line in response.iter_lines():
+            if line and line.decode('utf-8').startswith('data: '):
+                metrics = json.loads(line.decode('utf-8')[6:])
+                
+                self.cpu_window.append(metrics['cpu_used_pct'])
+                mem_pct = (metrics['mem_used_mib'] / metrics['mem_total_mib']) * 100
+                self.mem_window.append(mem_pct)
+                
+                if len(self.cpu_window) == self.cpu_window.maxlen:
+                    avg_cpu = sum(self.cpu_window) / len(self.cpu_window)
+                    avg_mem = sum(self.mem_window) / len(self.mem_window)
+                    
+                    if avg_cpu > scale_up_cpu or avg_mem > scale_up_mem:
+                        self.scale_up(avg_cpu, avg_mem)
+                    elif avg_cpu < scale_down_cpu and avg_mem < scale_down_mem:
+                        self.scale_down(avg_cpu, avg_mem)
+    
+    def scale_up(self, cpu, mem):
+        print(f"🔼 Scaling UP - CPU: {cpu:.1f}%, Memory: {mem:.1f}%")
+        # Implement scale-up logic
+    
+    def scale_down(self, cpu, mem):
+        print(f"🔽 Scaling DOWN - CPU: {cpu:.1f}%, Memory: {mem:.1f}%")
+        # Implement scale-down logic
+
+scaler = AutoScaler(
+    "http://localhost:44772/metrics/watch",
+    "your-token",
+    window_size=10  # Average over 10 seconds
+)
+scaler.monitor()
+```
+
+### Capacity Planning
+
+Collect metrics over time to understand usage patterns:
+
+```python
+import requests
+import json
+import time
+from datetime import datetime
+
+class MetricsLogger:
+    def __init__(self, url, token, log_file="metrics.jsonl"):
+        self.url = url
+        self.headers = {"X-EXECD-ACCESS-TOKEN": token}
+        self.log_file = log_file
+    
+    def log_metrics(self, duration_seconds=3600):
+        """Log metrics for a specified duration"""
+        start_time = time.time()
+        response = requests.get(self.url, headers=self.headers, stream=True)
+        
+        with open(self.log_file, 'a') as f:
+            for line in response.iter_lines():
+                if time.time() - start_time > duration_seconds:
+                    break
+                
+                if line and line.decode('utf-8').startswith('data: '):
+                    metrics = json.loads(line.decode('utf-8')[6:])
+                    log_entry = {
+                        "timestamp_iso": datetime.fromtimestamp(
+                            metrics['timestamp'] / 1000
+                        ).isoformat(),
+                        **metrics
+                    }
+                    f.write(json.dumps(log_entry) + '\n')
+                    f.flush()
+
+logger = MetricsLogger(
+    "http://localhost:44772/metrics/watch",
+    "your-token",
+    log_file="sandbox_metrics.jsonl"
+)
+logger.log_metrics(duration_seconds=3600)  # Log for 1 hour
+```
+
+## Memory Units
+
+The API returns memory in **MiB (Mebibytes)**, not MB (Megabytes):
+
+| Unit | Bytes | Comparison |
+|------|-------|------------|
+| 1 MiB | 1,048,576 bytes | 2²⁰ bytes |
+| 1 MB | 1,000,000 bytes | 10⁶ bytes |
+
+**Conversion:**
+- MiB to MB: `mib * 1.048576`
+- MB to MiB: `mb / 1.048576`
+- MiB to GiB: `mib / 1024`
+- GiB to MiB: `gib * 1024`
+
+## Best Practices
+
+### Polling vs Streaming
+
+**Use GET /metrics when:**
+- You need a one-time snapshot
+- Building health checks or periodic monitoring
+- Implementing simple alerting systems
+
+**Use GET /metrics/watch when:**
+- Building real-time dashboards
+- Continuous monitoring and alerting
+- Performance profiling during tests
+- Auto-scaling based on live metrics
+
+### Connection Management
+
+When using the watch endpoint:
+
+1. **Handle reconnection**: Network issues can close SSE connections
+2. **Set timeouts**: Prevent hanging connections
+3. **Graceful shutdown**: Close connections properly when done
+4. **Error handling**: Handle parsing errors and missing data
+
+```python
+import requests
+import json
+import time
+
+def watch_metrics_with_reconnect(url, token, max_retries=3):
+    retries = 0
+    
+    while retries < max_retries:
+        try:
+            response = requests.get(
+                url,
+                headers={"X-EXECD-ACCESS-TOKEN": token},
+                stream=True,
+                timeout=30
+            )
+            response.raise_for_status()
+            
+            for line in response.iter_lines():
+                if line:
+                    decoded = line.decode('utf-8')
+                    if decoded.startswith('data: '):
+                        try:
+                            metrics = json.loads(decoded[6:])
+                            yield metrics
+                            retries = 0  # Reset on success
+                        except json.JSONDecodeError:
+                            print("Error parsing metrics")
+        
+        except (requests.exceptions.RequestException, 
+                requests.exceptions.Timeout) as e:
+            retries += 1
+            print(f"Connection error (retry {retries}/{max_retries}): {e}")
+            if retries < max_retries:
+                time.sleep(5)  # Wait before retry
+            else:
+                raise
+
+# Usage
+for metrics in watch_metrics_with_reconnect(
+    "http://localhost:44772/metrics/watch",
+    "your-token"
+):
+    print(f"CPU: {metrics['cpu_used_pct']:.1f}%")
+```

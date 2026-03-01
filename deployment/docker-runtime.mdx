@@ -1,0 +1,305 @@
+---
+title: Docker Runtime Setup
+description: Configure and deploy OpenSandbox with Docker runtime
+---
+
+The Docker runtime is the production-ready backend for OpenSandbox Server, providing containerized sandbox environments with flexible networking options and comprehensive security controls.
+
+## Prerequisites
+
+Before deploying with Docker runtime, ensure you have:
+
+- **Docker Engine 20.10+** installed and running
+- **Python 3.10+** for the OpenSandbox server
+- **uv** package manager (recommended) or pip
+- **Operating System**: Linux, macOS, or Windows with WSL2
+
+## Installation
+
+<Steps>
+  <Step title="Install OpenSandbox Server">
+    Install the server package from PyPI:
+    
+    ```bash
+    uv pip install opensandbox-server
+    ```
+    
+    For source development, clone the repository and run `uv sync` inside `server/`.
+  </Step>
+
+  <Step title="Initialize Configuration">
+    Generate a Docker configuration file:
+    
+    ```bash
+    opensandbox-server init-config ~/.sandbox.toml --example docker
+    ```
+    
+    This creates a basic Docker runtime configuration at `~/.sandbox.toml`.
+  </Step>
+
+  <Step title="Configure Runtime Settings">
+    Edit `~/.sandbox.toml` to customize your deployment. See [Configuration Options](#configuration-options) below.
+  </Step>
+
+  <Step title="Start the Server">
+    Launch the server with your configuration:
+    
+    ```bash
+    opensandbox-server
+    ```
+    
+    The server will start at `http://0.0.0.0:8080` by default.
+  </Step>
+
+  <Step title="Verify Health">
+    Check that the server is running:
+    
+    ```bash
+    curl http://localhost:8080/health
+    ```
+    
+    Expected response:
+    ```json
+    {"status": "healthy"}
+    ```
+  </Step>
+</Steps>
+
+## Configuration Options
+
+### Basic Docker Configuration
+
+Minimal configuration for Docker runtime:
+
+```toml
+[server]
+host = "0.0.0.0"
+port = 8080
+log_level = "INFO"
+api_key = "your-secret-api-key-change-this"
+
+[runtime]
+type = "docker"
+execd_image = "opensandbox/execd:v1.0.6"
+
+[docker]
+network_mode = "bridge"
+```
+
+### Network Modes
+
+Docker runtime supports two networking modes:
+
+#### Host Mode
+
+Containers share the host network stack for maximum performance:
+
+```toml
+[docker]
+network_mode = "host"  # Only one sandbox instance at a time
+```
+
+**Characteristics:**
+- Direct port access without NAT
+- Best performance
+- Only one sandbox per port
+- Endpoint format: `http://{domain}/{sandbox_id}/{port}`
+
+#### Bridge Mode
+
+Isolated container networking with HTTP routing:
+
+```toml
+[docker]
+network_mode = "bridge"  # Isolated container networking
+```
+
+**Characteristics:**
+- Network isolation between containers
+- Multiple sandboxes can use the same port
+- Built-in HTTP routing support
+- Endpoint format varies by ingress configuration
+
+### Security Hardening
+
+Apply security controls to Docker containers:
+
+```toml
+[docker]
+# Drop dangerous capabilities
+drop_capabilities = [
+  "AUDIT_WRITE",
+  "MKNOD",
+  "NET_ADMIN",
+  "NET_RAW",
+  "SYS_ADMIN",
+  "SYS_MODULE",
+  "SYS_PTRACE",
+  "SYS_TIME",
+  "SYS_TTY_CONFIG"
+]
+
+# Block privilege escalation
+no_new_privileges = true
+
+# AppArmor profile (when available)
+apparmor_profile = ""  # e.g., "docker-default"
+
+# Limit fork bombs
+pids_limit = 512  # Set to null to disable
+
+# Seccomp profile
+seccomp_profile = ""  # Empty uses Docker default
+```
+
+Refer to [Docker container security documentation](https://docs.docker.com/engine/security/) for more details.
+
+### Network Policy with Egress Sidecar
+
+Control outbound network traffic with egress policies:
+
+```toml
+[runtime]
+type = "docker"
+execd_image = "opensandbox/execd:v1.0.6"
+
+[egress]
+image = "opensandbox/egress:v1.0.1"
+```
+
+**Requirements:**
+- Only supported in bridge mode
+- Egress image must be configured when using `networkPolicy`
+- Automatically disabled for host mode
+
+**Example Request:**
+
+```json
+{
+  "image": {"uri": "python:3.11-slim"},
+  "entrypoint": ["python", "-m", "http.server", "8000"],
+  "timeout": 3600,
+  "resourceLimits": {"cpu": "500m", "memory": "512Mi"},
+  "networkPolicy": {
+    "defaultAction": "deny",
+    "egress": [
+      {"action": "allow", "target": "pypi.org"},
+      {"action": "allow", "target": "*.python.org"}
+    ]
+  }
+}
+```
+
+### Advanced Docker Settings
+
+```toml
+[docker]
+# Docker API timeout (seconds)
+api_timeout = 300  # Default: 180
+
+# Host IP for bridge-mode endpoints (when server runs in container)
+host_ip = "10.57.1.91"
+```
+
+## Ingress Configuration
+
+Configure how clients access sandboxes:
+
+### Direct Mode (Default)
+
+```toml
+[ingress]
+mode = "direct"  # Required for Docker runtime
+```
+
+Clients connect directly to sandboxes. No external gateway required.
+
+### Gateway Mode
+
+```toml
+[ingress]
+mode = "gateway"
+
+[ingress.gateway]
+address = "*.example.com"  # Wildcard domain or IP[:port]
+
+[ingress.gateway.route]
+mode = "wildcard"  # wildcard | uri | header
+```
+
+**Routing Modes:**
+
+- **Wildcard**: `<sandbox-id>-<port>.example.com/path/to/request`
+- **URI**: `10.0.0.1:8000/<sandbox-id>/<port>/path/to/request`
+- **Header**: `gateway.example.com` with header `OpenSandbox-Ingress-To: <sandbox-id>-<port>`
+
+## Storage Configuration
+
+Control host path access for bind mounts:
+
+```toml
+[storage]
+# Allowlist of host path prefixes for bind mounts
+# Empty list allows all paths (not recommended for production)
+allowed_host_paths = ["/data/opensandbox", "/tmp/sandbox"]
+```
+
+## Environment Variables
+
+Override configuration with environment variables:
+
+| Variable | Description |
+|----------|-------------|
+| `SANDBOX_CONFIG_PATH` | Override config file location |
+| `DOCKER_HOST` | Docker daemon URL (e.g., `unix:///var/run/docker.sock`) |
+| `PENDING_FAILURE_TTL` | TTL for failed pending sandboxes in seconds (default: 3600) |
+
+## Example: Create a Sandbox
+
+Once the server is running, create a sandbox:
+
+```bash
+curl -X POST "http://localhost:8080/v1/sandboxes" \
+  -H "OPEN-SANDBOX-API-KEY: your-secret-api-key" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "image": {"uri": "python:3.11-slim"},
+    "entrypoint": ["python", "-m", "http.server", "8000"],
+    "timeout": 3600,
+    "resourceLimits": {
+      "cpu": "500m",
+      "memory": "512Mi"
+    },
+    "env": {"PYTHONUNBUFFERED": "1"},
+    "metadata": {
+      "team": "backend",
+      "project": "api-testing"
+    }
+  }'
+```
+
+## Troubleshooting
+
+### Server Won't Start
+
+- Verify Docker daemon is running: `docker ps`
+- Check configuration syntax: `opensandbox-server init-config ~/.sandbox.toml`
+- Enable debug logging: `log_level = "DEBUG"`
+
+### Connection Refused
+
+- Check `DOCKER_HOST` environment variable
+- Verify Docker socket permissions
+- Use remote Docker: `export DOCKER_HOST="ssh://user@remote-host"`
+
+### Network Policy Not Working
+
+- Ensure `network_mode = "bridge"`
+- Verify `egress.image` is configured
+- Check that egress image is accessible
+
+## Next Steps
+
+- [Configure server settings](/deployment/configuration)
+- [Review security best practices](/deployment/security)
+- [Explore API documentation](/api-reference/create-sandbox)

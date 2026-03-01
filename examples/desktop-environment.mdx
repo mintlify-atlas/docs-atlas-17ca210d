@@ -1,0 +1,369 @@
+---
+title: Desktop Environment (VNC)
+description: Run a full XFCE desktop environment with VNC access in OpenSandbox
+icon: desktop
+---
+
+This example demonstrates running a complete desktop environment (XFCE) in OpenSandbox with VNC access, enabling GUI applications and remote desktop functionality.
+
+## Overview
+
+The desktop sandbox image includes:
+- **Xvfb** (virtual framebuffer X server)
+- **x11vnc** (VNC server)
+- **XFCE** desktop environment (panel, file manager, terminal)
+- **noVNC** and **websockify** for browser-based VNC access
+- Non-root user (`desktop`) for security
+
+## Building the Image
+
+Build the desktop sandbox image from the Dockerfile:
+
+```bash
+cd examples/desktop
+docker build -t opensandbox/desktop:latest .
+```
+
+### Pull Pre-built Image
+
+Alternatively, pull the pre-built image:
+
+```bash
+docker pull opensandbox/desktop:latest
+```
+
+## Setup OpenSandbox Server
+
+Start the local OpenSandbox server:
+
+```bash
+uv pip install opensandbox-server
+opensandbox-server init-config ~/.sandbox.toml --example docker
+opensandbox-server
+```
+
+## Complete Example
+
+This example creates a full desktop environment accessible via both native VNC clients and web browsers:
+
+```python
+import asyncio
+import os
+from datetime import timedelta
+
+from opensandbox import Sandbox
+from opensandbox.config import ConnectionConfig
+from opensandbox.models.execd import RunCommandOpts
+
+
+async def _print_logs(label: str, execution) -> None:
+    """Helper to print execution logs"""
+    for msg in execution.logs.stdout:
+        print(f"[{label} stdout] {msg.text}")
+    for msg in execution.logs.stderr:
+        print(f"[{label} stderr] {msg.text}")
+    if execution.error:
+        print(f"[{label} error] {execution.error.name}: {execution.error.value}")
+
+
+async def main() -> None:
+    domain = os.getenv("SANDBOX_DOMAIN", "localhost:8080")
+    api_key = os.getenv("SANDBOX_API_KEY")
+    image = os.getenv(
+        "SANDBOX_IMAGE",
+        "opensandbox/desktop:latest",
+    )
+    python_version = os.getenv("PYTHON_VERSION", "3.11")
+    vnc_password = os.getenv("VNC_PASSWORD", "opensandbox")
+
+    config = ConnectionConfig(
+        domain=domain,
+        api_key=api_key,
+        request_timeout=timedelta(seconds=60),
+    )
+
+    sandbox = await Sandbox.create(
+        image,
+        connection_config=config,
+        env={
+            "PYTHON_VERSION": python_version,
+            "VNC_PASSWORD": vnc_password,
+        },
+    )
+
+    async with sandbox:
+        # Start virtual display
+        xvfb_exec = await sandbox.commands.run(
+            "Xvfb :0 -screen 0 1280x800x24",
+            opts=RunCommandOpts(background=True),
+        )
+        await _print_logs("xvfb", xvfb_exec)
+
+        # Start XFCE desktop session
+        xfce_exec = await sandbox.commands.run(
+            "DISPLAY=:0 dbus-launch startxfce4",
+            opts=RunCommandOpts(background=True),
+        )
+        await _print_logs("xfce", xfce_exec)
+
+        # Start x11vnc server
+        vnc_exec = await sandbox.commands.run(
+            "x11vnc -display :0 "
+            "-passwd \"$VNC_PASSWORD\" "
+            "-forever -shared -rfbport 5900",
+            opts=RunCommandOpts(background=True),
+        )
+        await _print_logs("x11vnc", vnc_exec)
+
+        # Start noVNC for browser access
+        novnc_exec = await sandbox.commands.run(
+            "/usr/bin/websockify --web=/usr/share/novnc 6080 localhost:5900",
+            opts=RunCommandOpts(background=True),
+        )
+        await _print_logs("novnc", novnc_exec)
+
+        # Get endpoints
+        endpoint_vnc = await sandbox.get_endpoint(5900)
+        endpoint_novnc = await sandbox.get_endpoint(6080)
+
+        # Build noVNC URL
+        novnc_host_port, novnc_path = endpoint_novnc.endpoint.split("/", 1)
+        novnc_host, novnc_port = novnc_host_port.split(":")
+        novnc_url = (
+            f"http://{endpoint_novnc.endpoint}/vnc.html"
+            f"?host={novnc_host}&port={novnc_port}&path={novnc_path}"
+        )
+
+        print("\nVNC endpoint (native clients):")
+        print(f"  {endpoint_vnc.endpoint}")
+        print(f"Password: {vnc_password}")
+
+        print("\nnoVNC (browser):")
+        print(f"  {novnc_url}")
+        print(f"Password: {vnc_password}")
+
+        print("\nKeeping sandbox alive for 5 minutes. Press Ctrl+C to exit sooner.")
+        try:
+            await asyncio.sleep(300)
+        except KeyboardInterrupt:
+            print("Stopping...")
+        finally:
+            await sandbox.kill()
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
+```
+
+Run the example:
+
+```bash
+uv pip install opensandbox
+uv run python examples/desktop/main.py
+```
+
+## Example Output
+
+The script will start all desktop components and output the access URLs:
+
+```text
+[xvfb stdout] Xvfb starting on display :0
+[xfce stdout] Starting XFCE session
+[x11vnc stdout] x11vnc server listening on port 5900
+[novnc stdout] WebSocket server listening on 6080
+
+VNC endpoint (native clients):
+  127.0.0.1:48379/proxy/5900
+Password: opensandbox
+
+noVNC (browser):
+  http://127.0.0.1:48379/proxy/6080/vnc.html?host=127.0.0.1&port=48379&path=proxy/6080
+Password: opensandbox
+
+Keeping sandbox alive for 5 minutes. Press Ctrl+C to exit sooner.
+```
+
+## Screenshots
+
+### Terminal Output
+
+![Desktop shell output](https://raw.githubusercontent.com/opensandbox-io/opensandbox/main/examples/desktop/screenshot_shell.jpg)
+
+### noVNC Connection
+
+![noVNC connect screen](https://raw.githubusercontent.com/opensandbox-io/opensandbox/main/examples/desktop/screenshot_connect.jpg)
+
+### Password Entry
+
+![noVNC password prompt](https://raw.githubusercontent.com/opensandbox-io/opensandbox/main/examples/desktop/screenshot_password.jpg)
+
+### Full Desktop
+
+![XFCE desktop interface](https://raw.githubusercontent.com/opensandbox-io/opensandbox/main/examples/desktop/screenshot_desktop.jpg)
+
+## Features
+
+### Full Desktop Environment
+
+- Complete XFCE desktop with panel, menus, and taskbar
+- File manager for browsing files
+- Terminal emulator for command-line access
+- Window management and desktop customization
+
+### Dual Access Methods
+
+- **Native VNC**: Connect with any VNC client (TigerVNC, RealVNC, etc.)
+- **Browser-based**: Access through noVNC in any web browser
+
+### Display Configuration
+
+- Virtual display runs at 1280x800x24 (configurable)
+- Xvfb provides framebuffer without GPU
+- Headless operation, no physical display needed
+
+## Environment Variables
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `SANDBOX_DOMAIN` | `localhost:8080` | OpenSandbox server address |
+| `SANDBOX_API_KEY` | - | API key for authentication |
+| `SANDBOX_IMAGE` | `opensandbox/desktop:latest` | Docker image to use |
+| `VNC_PASSWORD` | `opensandbox` | Password for VNC access |
+| `PYTHON_VERSION` | `3.11` | Python version in sandbox |
+
+## Customization
+
+### Display Resolution
+
+Change the virtual display resolution:
+
+```python
+await sandbox.commands.run(
+    "Xvfb :0 -screen 0 1920x1080x24",
+    opts=RunCommandOpts(background=True),
+)
+```
+
+### VNC Server Options
+
+Customize x11vnc behavior:
+
+```python
+await sandbox.commands.run(
+    "x11vnc -display :0 "
+    "-passwd \"$VNC_PASSWORD\" "
+    "-forever "
+    "-shared "
+    "-noxdamage "
+    "-rfbport 5900",
+    opts=RunCommandOpts(background=True),
+)
+```
+
+| Option | Description |
+|--------|-------------|
+| `-forever` | Keep server running after client disconnect |
+| `-shared` | Allow multiple simultaneous connections |
+| `-noxdamage` | Disable X DAMAGE extension (may improve performance) |
+| `-rfbport` | Port to listen on |
+
+### Running GUI Applications
+
+Launch GUI applications in the desktop:
+
+```python
+# Install and run Firefox
+await sandbox.commands.run(
+    "DISPLAY=:0 firefox &",
+    opts=RunCommandOpts(background=True),
+)
+
+# Run Python GUI application
+await sandbox.commands.run(
+    "DISPLAY=:0 python my_gui_app.py",
+    opts=RunCommandOpts(background=True),
+)
+```
+
+## Use Cases
+
+### GUI Application Testing
+
+- Test desktop applications in isolated environments
+- Capture screenshots and videos of application behavior
+- Automate GUI testing workflows
+- Support multiple display configurations
+
+### Remote Development
+
+- Provide full desktop environments to developers
+- Access graphical development tools remotely
+- Run IDE, debugger, and profiler with GUI
+- Collaborate on visual debugging
+
+### AI Agent Interfaces
+
+- Enable AI to interact with GUI applications
+- Visual task automation and testing
+- Screen capture for vision models
+- Computer use demonstrations
+
+### Education and Training
+
+- Provide pre-configured desktop environments
+- Students access consistent environments
+- Safe experimentation without affecting local systems
+- Easy reset and reproducibility
+
+## Component Details
+
+### Xvfb (X Virtual Framebuffer)
+
+- Provides X11 display without physical screen
+- Runs entirely in memory
+- Supports full X11 protocol
+- No GPU required
+
+### x11vnc
+
+- VNC server for X11 displays
+- Shares existing X session
+- Password protection support
+- Multiple client connections
+
+### XFCE Desktop
+
+- Lightweight desktop environment
+- Low resource requirements
+- Fast startup time
+- Familiar desktop paradigm
+
+### noVNC
+
+- HTML5 VNC client
+- No client installation required
+- Works in any modern browser
+- WebSocket-based connection
+
+## Security Considerations
+
+- **VNC Password**: Change default password for production use
+- **Network Isolation**: Sandbox provides network isolation
+- **User Permissions**: Runs as non-root `desktop` user
+- **TLS/SSL**: Consider adding encryption for production
+- **Temporary Sessions**: Destroy sandboxes after use
+
+## Performance Tips
+
+- Lower resolution for better performance (800x600x16)
+- Disable XFCE compositor for reduced CPU usage
+- Use `-noxdamage` flag with x11vnc
+- Limit number of concurrent sessions
+- Consider using a more lightweight window manager
+
+## References
+
+- [noVNC Project](https://github.com/novnc/noVNC)
+- [x11vnc Documentation](https://github.com/LibVNC/x11vnc)
+- [XFCE Desktop](https://www.xfce.org/)
+- [Xvfb Manual](https://www.x.org/releases/X11R7.6/doc/man/man1/Xvfb.1.xhtml)

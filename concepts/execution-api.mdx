@@ -1,0 +1,416 @@
+---
+title: Execution API
+description: Understand how to execute commands, run code, and manage files in sandboxes
+icon: terminal
+---
+
+The Execution API enables you to interact with running sandboxes through commands, code execution, file operations, and metrics monitoring. It's implemented by the **execd** daemon injected into every sandbox.
+
+## API design
+
+The Execution API is built on REST principles with Server-Sent Events (SSE) for real-time streaming:
+
+- **Base URL**: `http://<sandbox-endpoint>` (obtained via `sandbox.get_endpoint()`)
+- **Authentication**: `X-EXECD-ACCESS-TOKEN` header (automatically handled by SDKs)
+- **Streaming**: SSE for command output, code execution results, and metrics
+
+<Info>
+  The SDK abstracts the Execution API, so you typically don't need to call it directly. Use `sandbox.commands`, `sandbox.files`, and `CodeInterpreter` instead.
+</Info>
+
+## Command execution
+
+Execute shell commands in the sandbox with streaming output.
+
+### Foreground commands
+
+Run commands synchronously and capture output:
+
+```python
+execution = await sandbox.commands.run(
+    "pip install numpy pandas",
+    working_dir="/workspace"
+)
+
+print(execution.logs.stdout[0].text)
+print(f"Exit code: {execution.exit_code}")
+```
+
+**Features:**
+- Real-time output streaming via SSE
+- Capture stdout and stderr separately
+- Exit code available after completion
+- Custom working directory
+
+### Background commands
+
+Launch long-running processes in detached mode:
+
+```python
+session = await sandbox.commands.run_background(
+    "python train.py",
+    working_dir="/workspace"
+)
+
+# Check status later
+status = await sandbox.commands.get_status(session)
+if status.is_complete:
+    output = await sandbox.commands.get_output(session)
+    print(output.stdout)
+```
+
+**Use cases:**
+- Training ML models
+- Running web servers
+- Background data processing
+- Long-running tests
+
+### Command interruption
+
+Interrupt running commands:
+
+```python
+import asyncio
+
+task = asyncio.create_task(
+    sandbox.commands.run("sleep 3600")
+)
+
+# Cancel after 5 seconds
+await asyncio.sleep(5)
+task.cancel()
+```
+
+## Code execution
+
+Execute code in multiple languages with stateful sessions.
+
+### Creating contexts
+
+A **context** maintains execution state across multiple code blocks:
+
+```python
+from code_interpreter import CodeInterpreter, SupportedLanguage
+
+interpreter = await CodeInterpreter.create(sandbox)
+
+# Create Python context
+context = await interpreter.codes.create_context(
+    SupportedLanguage.PYTHON
+)
+
+# Execute code in the context
+result1 = await interpreter.codes.run(
+    "x = 10\ny = 20",
+    context_id=context.context_id
+)
+
+# Variables persist
+result2 = await interpreter.codes.run(
+    "x + y",
+    context_id=context.context_id
+)
+print(result2.result[0].text)  # 30
+```
+
+### Supported languages
+
+The Code Interpreter supports multiple programming languages:
+
+| Language | Kernel | Version Configuration |
+|----------|--------|----------------------|
+| Python | IPython | `PYTHON_VERSION=3.11` |
+| Java | IJava | `JAVA_VERSION=17` |
+| JavaScript | IJavaScript | `NODE_VERSION=20` |
+| TypeScript | ITypeScript | `NODE_VERSION=20` |
+| Go | Gophernotes | `GO_VERSION=1.22` |
+| Bash | Bash | N/A |
+
+### Stateful vs stateless execution
+
+<Tabs>
+  <Tab title="Stateful (with context)">
+    Variables and state persist across executions:
+    
+    ```python
+    context = await interpreter.codes.create_context(
+        SupportedLanguage.PYTHON
+    )
+    
+    await interpreter.codes.run("x = 100", context_id=context.context_id)
+    result = await interpreter.codes.run("x * 2", context_id=context.context_id)
+    print(result.result[0].text)  # 200
+    ```
+  </Tab>
+  <Tab title="Stateless (default context)">
+    Each execution is independent:
+    
+    ```python
+    result = await interpreter.codes.run(
+        "import sys\nprint(sys.version)",
+        language=SupportedLanguage.PYTHON
+    )
+    print(result.logs.stdout[0].text)  # Python version
+    ```
+  </Tab>
+</Tabs>
+
+### Execution results
+
+Code execution returns structured results:
+
+```python
+result = await interpreter.codes.run(
+    "2 + 2",
+    language=SupportedLanguage.PYTHON
+)
+
+# Result value (last expression)
+print(result.result[0].text)  # "4"
+
+# Standard output
+print(result.logs.stdout)  # List of output lines
+
+# Standard error
+print(result.logs.stderr)  # List of error lines
+
+# Execution count
+print(result.execution_count)  # 1
+```
+
+## File operations
+
+Manage files and directories in the sandbox.
+
+### Writing files
+
+<Tabs>
+  <Tab title="Single file">
+    ```python
+    await sandbox.files.write_file(
+        "/workspace/script.py",
+        "print('Hello World')",
+        mode=0o644
+    )
+    ```
+  </Tab>
+  <Tab title="Multiple files">
+    ```python
+    from opensandbox.models import WriteEntry
+    
+    await sandbox.files.write_files([
+        WriteEntry(
+            path="/workspace/main.py",
+            data="print('Main')",
+            mode=0o755
+        ),
+        WriteEntry(
+            path="/workspace/config.json",
+            data='{"key": "value"}',
+            mode=0o644
+        )
+    ])
+    ```
+  </Tab>
+  <Tab title="Binary files">
+    ```python
+    with open("image.png", "rb") as f:
+        data = f.read()
+    
+    await sandbox.files.write_file(
+        "/workspace/image.png",
+        data,
+        mode=0o644
+    )
+    ```
+  </Tab>
+</Tabs>
+
+### Reading files
+
+```python
+# Read text file
+content = await sandbox.files.read_file("/workspace/output.txt")
+print(content)
+
+# Read binary file
+data = await sandbox.files.read_file("/workspace/image.png", binary=True)
+```
+
+### File metadata
+
+```python
+info = await sandbox.files.get_info("/workspace/script.py")
+
+print(f"Size: {info.size} bytes")
+print(f"Mode: {oct(info.mode)}")
+print(f"Owner: {info.owner}")
+print(f"Modified: {info.mtime}")
+```
+
+### Searching files
+
+Use glob patterns to find files:
+
+```python
+# Find all Python files
+files = await sandbox.files.search("/workspace/**/*.py")
+for file in files:
+    print(file.path)
+
+# Find log files
+logs = await sandbox.files.search("/var/log/*.log")
+```
+
+### Permissions
+
+Change file permissions:
+
+```python
+# Make file executable
+await sandbox.files.set_permissions(
+    "/workspace/script.sh",
+    mode=0o755
+)
+
+# Change ownership
+await sandbox.files.set_permissions(
+    "/workspace/data.txt",
+    owner="user",
+    group="users"
+)
+```
+
+### Directory operations
+
+```python
+# Create directory
+await sandbox.files.create_directory(
+    "/workspace/data",
+    mode=0o755,
+    parents=True  # Like mkdir -p
+)
+
+# List directory contents
+entries = await sandbox.files.list_directory("/workspace")
+for entry in entries:
+    print(f"{entry.name} ({'dir' if entry.is_directory else 'file'})")
+
+# Delete directory
+await sandbox.files.delete_directory(
+    "/workspace/temp",
+    recursive=True
+)
+```
+
+## System metrics
+
+Monitor sandbox resource usage in real-time.
+
+### Snapshot metrics
+
+Get current resource usage:
+
+```python
+metrics = await sandbox.get_metrics()
+
+print(f"CPU: {metrics.cpu_percent}%")
+print(f"Memory: {metrics.memory_used_in_mib} MiB / {metrics.memory_total_in_mib} MiB")
+print(f"Memory usage: {metrics.memory_percent}%")
+```
+
+### Streaming metrics
+
+Watch metrics in real-time via SSE:
+
+```python
+async for metrics in sandbox.watch_metrics():
+    print(f"CPU: {metrics.cpu_percent}% | Memory: {metrics.memory_percent}%")
+    
+    if metrics.memory_percent > 80:
+        print("Warning: High memory usage!")
+        break
+```
+
+<Warning>
+  Streaming metrics generates continuous data. Use it for monitoring dashboards or alerting, not for periodic checks.
+</Warning>
+
+## Error handling
+
+The Execution API returns structured errors:
+
+```python
+from opensandbox.exceptions import SandboxException
+
+try:
+    await sandbox.commands.run("invalid-command")
+except SandboxException as e:
+    print(f"Error code: {e.error.code}")
+    print(f"Message: {e.error.message}")
+    print(f"Details: {e.error.details}")
+```
+
+### Common error codes
+
+| Code | Description | Solution |
+|------|-------------|----------|
+| `EXECD_NOT_READY` | execd daemon not ready | Wait and retry |
+| `COMMAND_FAILED` | Command exited with error | Check exit code and stderr |
+| `FILE_NOT_FOUND` | File does not exist | Verify path |
+| `PERMISSION_DENIED` | Insufficient permissions | Check file ownership/mode |
+| `CONTEXT_NOT_FOUND` | Code context expired | Create new context |
+| `EXECUTION_TIMEOUT` | Code execution timed out | Increase timeout or optimize code |
+
+## Best practices
+
+<AccordionGroup>
+  <Accordion title="Use appropriate execution methods">
+    - **Foreground commands**: Short-lived commands (< 1 min)
+    - **Background commands**: Long-running processes (> 1 min)
+    - **Code execution**: When you need structured output and state management
+  </Accordion>
+  
+  <Accordion title="Handle streaming output">
+    For commands with large output, process streaming data incrementally:
+    
+    ```python
+    async for line in sandbox.commands.run_stream("npm install"):
+        print(line.text)
+    ```
+  </Accordion>
+  
+  <Accordion title="Clean up contexts">
+    Delete code contexts when done to free resources:
+    
+    ```python
+    await interpreter.codes.delete_context(context.context_id)
+    ```
+  </Accordion>
+  
+  <Accordion title="Use file batching">
+    Write multiple files in a single operation for better performance:
+    
+    ```python
+    await sandbox.files.write_files([...])  # Better
+    # vs
+    for file in files:
+        await sandbox.files.write_file(...)  # Slower
+    ```
+  </Accordion>
+</AccordionGroup>
+
+<CardGroup cols={2}>
+  <Card title="Command execution" icon="terminal" href="/api/execution/commands">
+    Full reference for command execution endpoints
+  </Card>
+  <Card title="Code interpreter" icon="code" href="/api/execution/code-interpreter">
+    Complete code execution API reference
+  </Card>
+  <Card title="Filesystem" icon="folder" href="/api/execution/filesystem">
+    File operations API reference
+  </Card>
+  <Card title="Examples" icon="book" href="/examples/basic-sandbox">
+    Practical examples using the Execution API
+  </Card>
+</CardGroup>

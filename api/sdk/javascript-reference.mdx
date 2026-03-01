@@ -1,0 +1,613 @@
+---
+title: JavaScript/TypeScript SDK Reference
+description: Complete API reference for the OpenSandbox JavaScript/TypeScript SDK
+---
+
+The OpenSandbox JavaScript/TypeScript SDK provides secure, isolated execution environments with comprehensive file system access, command execution, and resource management capabilities.
+
+## Installation
+
+<CodeGroup>
+```bash npm
+npm install @alibaba-group/opensandbox
+```
+
+```bash pnpm
+pnpm add @alibaba-group/opensandbox
+```
+
+```bash yarn
+yarn add @alibaba-group/opensandbox
+```
+</CodeGroup>
+
+## Core Classes
+
+### Sandbox
+
+Main class for creating and managing sandbox instances.
+
+#### Static Methods
+
+##### create()
+
+Create a new sandbox instance with the specified configuration.
+
+```typescript
+import { Sandbox, ConnectionConfig } from "@alibaba-group/opensandbox";
+
+const config = new ConnectionConfig({
+  domain: "api.opensandbox.io",
+  apiKey: "your-api-key",
+});
+
+const sandbox = await Sandbox.create({
+  connectionConfig: config,
+  image: "python:3.11",
+  timeoutSeconds: 30 * 60,
+  env: { PYTHONPATH: "/workspace" },
+  resource: { cpu: "2", memory: "4Gi" },
+});
+```
+
+<ParamField path="options" type="object" required>
+  Configuration options for sandbox creation.
+
+  <Expandable title="properties">
+    <ParamField path="connectionConfig" type="ConnectionConfig" required>
+      Connection configuration for API server.
+    </ParamField>
+
+    <ParamField path="image" type="string" required>
+      Docker image to use.
+    </ParamField>
+
+    <ParamField path="timeoutSeconds" type="number" default="600">
+      Automatic termination timeout (server-side TTL).
+    </ParamField>
+
+    <ParamField path="entrypoint" type="string[]" default='["tail", "-f", "/dev/null"]'>
+      Container entrypoint command.
+    </ParamField>
+
+    <ParamField path="resource" type="Record<string, string>" default='{"cpu": "1", "memory": "2Gi"}'>
+      CPU and memory limits.
+    </ParamField>
+
+    <ParamField path="env" type="Record<string, string>">
+      Environment variables.
+    </ParamField>
+
+    <ParamField path="metadata" type="Record<string, string>">
+      Custom metadata tags.
+    </ParamField>
+
+    <ParamField path="networkPolicy" type="NetworkPolicy">
+      Optional outbound network policy (egress).
+    </ParamField>
+
+    <ParamField path="extensions" type="Record<string, string>">
+      Extra server-defined fields.
+    </ParamField>
+
+    <ParamField path="skipHealthCheck" type="boolean" default="false">
+      Skip readiness checks (Running + health check).
+    </ParamField>
+
+    <ParamField path="healthCheck" type="(sandbox: Sandbox) => Promise<boolean>">
+      Custom readiness check function.
+    </ParamField>
+
+    <ParamField path="readyTimeoutSeconds" type="number" default="30">
+      Maximum time to wait for readiness.
+    </ParamField>
+
+    <ParamField path="healthCheckPollingInterval" type="number" default="200">
+      Poll interval while waiting (milliseconds).
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+<ResponseField name="return" type="Promise<Sandbox>">
+  Fully configured and ready Sandbox instance.
+</ResponseField>
+
+#### Instance Methods
+
+##### getInfo()
+
+Get the current status of the sandbox.
+
+```typescript
+const info = await sandbox.getInfo();
+console.log("State:", info.status.state);
+console.log("Created:", info.createdAt);
+console.log("Expires:", info.expiresAt);
+```
+
+<ResponseField name="return" type="Promise<SandboxInfo>">
+  Current sandbox status including state and metadata.
+</ResponseField>
+
+##### getEndpoint()
+
+Get a specific network endpoint for the sandbox.
+
+```typescript
+const { endpoint } = await sandbox.getEndpoint(80);
+console.log("Endpoint:", endpoint);
+```
+
+<ParamField path="port" type="number" required>
+  The port number to get the endpoint for.
+</ParamField>
+
+<ResponseField name="return" type="Promise<{ endpoint: string }>">
+  Endpoint information (without scheme, e.g., "localhost:44772").
+</ResponseField>
+
+##### getEndpointUrl()
+
+Get a ready-to-use absolute URL for a port.
+
+```typescript
+const url = await sandbox.getEndpointUrl(80);
+console.log("URL:", url); // e.g., "http://localhost:44772"
+```
+
+<ParamField path="port" type="number" required>
+  The port number to get the URL for.
+</ParamField>
+
+<ResponseField name="return" type="Promise<string>">
+  Absolute URL with scheme.
+</ResponseField>
+
+##### renew()
+
+Renew the sandbox expiration time.
+
+```typescript
+await sandbox.renew(30 * 60); // 30 minutes
+```
+
+<ParamField path="timeoutSeconds" type="number" required>
+  Duration in seconds to extend the expiration.
+</ParamField>
+
+<ResponseField name="return" type="Promise<void>">
+  Promise that resolves when renewal is complete.
+</ResponseField>
+
+##### pause()
+
+Pause the sandbox while preserving its state.
+
+```typescript
+await sandbox.pause();
+```
+
+<ResponseField name="return" type="Promise<void>">
+  Promise that resolves when sandbox is paused.
+</ResponseField>
+
+##### resume()
+
+Resume a previously paused sandbox.
+
+```typescript
+const resumed = await sandbox.resume();
+```
+
+<ResponseField name="return" type="Promise<Sandbox>">
+  Fresh, connected Sandbox instance.
+</ResponseField>
+
+##### kill()
+
+Terminate the remote sandbox instance.
+
+```typescript
+await sandbox.kill();
+```
+
+<ResponseField name="return" type="Promise<void>">
+  Promise that resolves when sandbox is terminated.
+</ResponseField>
+
+##### close()
+
+Close local resources (HTTP agent) associated with the sandbox.
+
+```typescript
+await sandbox.close();
+```
+
+<ResponseField name="return" type="Promise<void>">
+  Promise that resolves when resources are closed.
+</ResponseField>
+
+#### Properties
+
+##### commands
+
+Provides access to command execution operations.
+
+```typescript
+const execution = await sandbox.commands.run("echo 'Hello World'");
+console.log(execution.logs.stdout[0]?.text);
+```
+
+<ResponseField name="type" type="Commands">
+  Command execution interface.
+</ResponseField>
+
+##### files
+
+Provides access to file system operations.
+
+```typescript
+await sandbox.files.writeFiles([
+  { path: "/tmp/hello.txt", data: "Hello World", mode: 644 },
+]);
+const content = await sandbox.files.readFile("/tmp/hello.txt");
+```
+
+<ResponseField name="type" type="Filesystem">
+  File system operations interface.
+</ResponseField>
+
+### SandboxManager
+
+Administrative interface for managing multiple sandbox instances.
+
+#### Static Methods
+
+##### create()
+
+Create a SandboxManager instance.
+
+```typescript
+import { SandboxManager, ConnectionConfig } from "@alibaba-group/opensandbox";
+
+const config = new ConnectionConfig({
+  domain: "api.opensandbox.io",
+  apiKey: "your-api-key",
+});
+
+const manager = SandboxManager.create({ connectionConfig: config });
+```
+
+<ParamField path="options" type="object" required>
+  <Expandable title="properties">
+    <ParamField path="connectionConfig" type="ConnectionConfig" required>
+      Connection configuration.
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+<ResponseField name="return" type="SandboxManager">
+  Configured sandbox manager instance.
+</ResponseField>
+
+#### Instance Methods
+
+##### listSandboxInfos()
+
+List sandboxes with filtering options.
+
+```typescript
+const list = await manager.listSandboxInfos({
+  states: ["Running"],
+  pageSize: 10,
+});
+console.log(list.items.map((s) => s.id));
+```
+
+<ParamField path="filter" type="object" required>
+  <Expandable title="properties">
+    <ParamField path="states" type="string[]">
+      Filter by sandbox states.
+    </ParamField>
+
+    <ParamField path="pageSize" type="number">
+      Number of results per page.
+    </ParamField>
+
+    <ParamField path="page" type="number">
+      Page number.
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+<ResponseField name="return" type="Promise<PagedSandboxInfos>">
+  Paged sandbox information matching the filter criteria.
+</ResponseField>
+
+##### close()
+
+Close local resources associated with the manager.
+
+```typescript
+await manager.close();
+```
+
+<ResponseField name="return" type="Promise<void>">
+  Promise that resolves when resources are closed.
+</ResponseField>
+
+## Service Interfaces
+
+### Commands
+
+Command execution service for sandbox environments.
+
+#### run()
+
+Execute a shell command in the sandbox.
+
+```typescript
+import type { ExecutionHandlers } from "@alibaba-group/opensandbox";
+
+// Simple execution
+const execution = await sandbox.commands.run("echo 'Hello World'");
+console.log(execution.logs.stdout[0]?.text);
+
+// With streaming handlers
+const handlers: ExecutionHandlers = {
+  onStdout: (m) => console.log("STDOUT:", m.text),
+  onStderr: (m) => console.error("STDERR:", m.text),
+  onExecutionComplete: (c) => console.log("Finished in", c.executionTimeMs, "ms"),
+};
+
+await sandbox.commands.run(
+  'for i in 1 2 3; do echo "Count $i"; sleep 0.2; done',
+  undefined,
+  handlers
+);
+```
+
+<ParamField path="command" type="string" required>
+  Shell command text to execute.
+</ParamField>
+
+<ParamField path="options" type="object">
+  <Expandable title="properties">
+    <ParamField path="background" type="boolean">
+      Run command in background mode.
+    </ParamField>
+
+    <ParamField path="workingDirectory" type="string">
+      Working directory for command execution.
+    </ParamField>
+
+    <ParamField path="timeoutSeconds" type="number">
+      Command execution timeout.
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+<ParamField path="handlers" type="ExecutionHandlers">
+  Optional handlers for streaming events.
+</ParamField>
+
+<ResponseField name="return" type="Promise<Execution>">
+  Execution handle representing the running command.
+</ResponseField>
+
+### Filesystem
+
+Filesystem operations service for sandbox environments.
+
+#### readFile()
+
+Read the content of a file as a string.
+
+```typescript
+const content = await sandbox.files.readFile("/tmp/hello.txt");
+console.log("Content:", content);
+```
+
+<ParamField path="path" type="string" required>
+  The absolute or relative path to the file to read.
+</ParamField>
+
+<ResponseField name="return" type="Promise<string>">
+  The file content as a string.
+</ResponseField>
+
+#### writeFiles()
+
+Write content to files.
+
+```typescript
+await sandbox.files.writeFiles([
+  { path: "/tmp/hello.txt", data: "Hello World", mode: 644 },
+]);
+```
+
+<ParamField path="entries" type="WriteEntry[]" required>
+  List of write entries specifying files and their content.
+</ParamField>
+
+<ResponseField name="return" type="Promise<void>">
+  Promise that resolves when files are written.
+</ResponseField>
+
+#### createDirectories()
+
+Create directories.
+
+```typescript
+await sandbox.files.createDirectories([{ path: "/tmp/demo", mode: 755 }]);
+```
+
+<ParamField path="entries" type="CreateDirectoryEntry[]" required>
+  List of directory entries.
+</ParamField>
+
+<ResponseField name="return" type="Promise<void>">
+  Promise that resolves when directories are created.
+</ResponseField>
+
+#### deleteFiles()
+
+Delete the specified files.
+
+```typescript
+await sandbox.files.deleteFiles(["/tmp/hello.txt"]);
+```
+
+<ParamField path="paths" type="string[]" required>
+  List of file paths to delete.
+</ParamField>
+
+<ResponseField name="return" type="Promise<void>">
+  Promise that resolves when files are deleted.
+</ResponseField>
+
+#### deleteDirectories()
+
+Delete the specified directories.
+
+```typescript
+await sandbox.files.deleteDirectories(["/tmp/demo"]);
+```
+
+<ParamField path="paths" type="string[]" required>
+  List of directory paths to delete.
+</ParamField>
+
+<ResponseField name="return" type="Promise<void>">
+  Promise that resolves when directories are deleted.
+</ResponseField>
+
+#### search()
+
+Search for files and directories.
+
+```typescript
+const files = await sandbox.files.search({
+  path: "/tmp/demo",
+  pattern: "*.txt",
+});
+console.log(files.map((f) => f.path));
+```
+
+<ParamField path="entry" type="object" required>
+  <Expandable title="properties">
+    <ParamField path="path" type="string" required>
+      Base path to search in.
+    </ParamField>
+
+    <ParamField path="pattern" type="string">
+      Glob pattern for matching.
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+<ResponseField name="return" type="Promise<EntryInfo[]>">
+  List of matching file/directory information.
+</ResponseField>
+
+## Configuration
+
+### ConnectionConfig
+
+Connection configuration for API server communication.
+
+```typescript
+import { ConnectionConfig } from "@alibaba-group/opensandbox";
+
+const config = new ConnectionConfig({
+  domain: "api.opensandbox.io",
+  apiKey: "your-api-key",
+  protocol: "https",
+  requestTimeoutSeconds: 60,
+  headers: { "X-Custom-Header": "value" },
+});
+```
+
+<ParamField path="options" type="object" required>
+  <Expandable title="properties">
+    <ParamField path="apiKey" type="string">
+      API key for authentication (can also be set via `OPEN_SANDBOX_API_KEY` environment variable).
+    </ParamField>
+
+    <ParamField path="domain" type="string" default="localhost:8080">
+      Sandbox service domain (can also be set via `OPEN_SANDBOX_DOMAIN` environment variable).
+    </ParamField>
+
+    <ParamField path="protocol" type="'http' | 'https'" default="http">
+      HTTP protocol.
+    </ParamField>
+
+    <ParamField path="requestTimeoutSeconds" type="number" default="30">
+      Request timeout applied to SDK HTTP calls.
+    </ParamField>
+
+    <ParamField path="debug" type="boolean" default="false">
+      Enable basic HTTP debug logging.
+    </ParamField>
+
+    <ParamField path="headers" type="Record<string, string>">
+      Extra headers applied to every request.
+    </ParamField>
+
+    <ParamField path="useServerProxy" type="boolean" default="false">
+      Use sandbox server as proxy for execd/endpoint requests.
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+## Browser Support
+
+The SDK can run in browsers with the following limitations:
+
+- Streaming file uploads are Node-only
+- In browsers, `writeFiles` with `ReadableStream` or `AsyncIterable` will buffer in memory before upload
+- This is due to browser limitations with streaming `multipart/form-data` bodies
+
+## Complete Example
+
+```typescript
+import { ConnectionConfig, Sandbox, SandboxException } from "@alibaba-group/opensandbox";
+
+const config = new ConnectionConfig({
+  domain: "api.opensandbox.io",
+  apiKey: "your-api-key",
+});
+
+try {
+  const sandbox = await Sandbox.create({
+    connectionConfig: config,
+    image: "python:3.11",
+    timeoutSeconds: 30 * 60,
+  });
+
+  // Write a file
+  await sandbox.files.writeFiles([
+    { path: "/tmp/script.py", data: "print('Hello World')", mode: 644 },
+  ]);
+
+  // Execute command with streaming
+  const handlers = {
+    onStdout: (m) => console.log("Output:", m.text),
+  };
+  await sandbox.commands.run("python /tmp/script.py", undefined, handlers);
+
+  // Get info
+  const info = await sandbox.getInfo();
+  console.log("State:", info.status.state);
+
+  // Cleanup
+  await sandbox.kill();
+  await sandbox.close();
+} catch (err) {
+  if (err instanceof SandboxException) {
+    console.error(`Sandbox Error: [${err.error.code}] ${err.error.message ?? ""}`);
+  } else {
+    console.error(err);
+  }
+}
+```

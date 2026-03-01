@@ -1,0 +1,296 @@
+---
+title: AI Coding Agents
+description: Run AI coding agents safely in isolated sandboxes with tool access
+---
+
+OpenSandbox provides isolated execution environments for AI coding agents, allowing them to safely execute code, install dependencies, and use development tools without compromising security.
+
+## Overview
+
+AI coding agents like Claude, GPT-4, and others can leverage OpenSandbox to:
+
+- Execute code in isolated containers with configurable resource limits
+- Install packages and dependencies on-demand
+- Access files and directories within the sandbox
+- Run development tools (compilers, interpreters, test frameworks)
+- Generate and test code safely without affecting host systems
+
+## Use Cases
+
+### Code Execution for LLMs
+
+Provide language models with a safe execution environment for code generation, testing, and debugging.
+
+**Benefits:**
+- Isolated execution prevents malicious code from affecting the host
+- Ephemeral environments ensure clean state for each task
+- Resource limits prevent runaway processes
+- Full observability of code execution and outputs
+
+### Interactive Development Assistants
+
+Build coding assistants that can write, test, and refactor code in real-time.
+
+**Example:** Claude Code CLI integration
+
+```python
+import asyncio
+from opensandbox import Sandbox
+from opensandbox.config import ConnectionConfig
+
+async def run_claude_agent():
+    sandbox = await Sandbox.create(
+        "opensandbox/code-interpreter:v1.0.1",
+        connection_config=ConnectionConfig(domain="localhost:8080"),
+        env={
+            "ANTHROPIC_AUTH_TOKEN": "your-token",
+            "ANTHROPIC_MODEL": "claude_sonnet4"
+        }
+    )
+    
+    async with sandbox:
+        # Install Claude CLI
+        await sandbox.commands.run(
+            "npm i -g @anthropic-ai/claude-code@latest"
+        )
+        
+        # Execute Claude commands
+        result = await sandbox.commands.run(
+            'claude "Write a Python function to calculate fibonacci"'
+        )
+        
+        for msg in result.logs.stdout:
+            print(msg.text)
+```
+
+View the complete example: [`examples/claude-code/`](https://github.com/opensandbox-io/opensandbox/tree/main/examples/claude-code)
+
+### Agent Workflow Orchestration
+
+Integrate with agent frameworks like LangGraph to create complex workflows that combine LLM reasoning with code execution.
+
+**Example:** LangGraph + OpenSandbox
+
+```python
+from langgraph.graph import StateGraph
+from opensandbox import Sandbox
+
+# Define state machine nodes
+def create_sandbox(state):
+    sandbox = await Sandbox.create("opensandbox/code-interpreter:v1.0.1")
+    return {**state, "sandbox": sandbox}
+
+def run_code(state):
+    result = await state["sandbox"].commands.run(state["command"])
+    return {**state, "result": result}
+
+def analyze_results(state):
+    # Use LLM to analyze execution results
+    analysis = await llm.invoke(
+        f"Analyze this output: {state['result'].logs.stdout}"
+    )
+    return {**state, "analysis": analysis}
+
+# Build workflow graph
+workflow = StateGraph()
+workflow.add_node("create", create_sandbox)
+workflow.add_node("execute", run_code)
+workflow.add_node("analyze", analyze_results)
+```
+
+View the complete example: [`examples/langgraph/`](https://github.com/opensandbox-io/opensandbox/tree/main/examples/langgraph)
+
+## Key Features
+
+### Pre-built Images
+
+OpenSandbox provides optimized images for AI agent use cases:
+
+- **code-interpreter**: Python, Node.js, common development tools
+- **desktop**: Full desktop environment with GUI support
+- **chrome**: Browser automation with DevTools support
+
+### SDK Integration
+
+Multiple SDKs for easy integration:
+
+- Python SDK with async/await support
+- Java/Kotlin SDK for JVM-based agents
+- REST API for any language
+
+### File Operations
+
+Agents can read, write, and manage files within sandboxes:
+
+```python
+# Write code to sandbox
+await sandbox.files.write_file("script.py", python_code)
+
+# Execute the code
+result = await sandbox.commands.run("python script.py")
+
+# Read output files
+output = await sandbox.files.read_file("results.json")
+```
+
+### Resource Control
+
+Configure memory, CPU, and timeout limits per sandbox:
+
+```python
+sandbox = await Sandbox.create(
+    "opensandbox/code-interpreter:v1.0.1",
+    timeout=timedelta(minutes=5),
+    memory_limit="512Mi",
+    cpu_limit="1"
+)
+```
+
+## Architecture
+
+```
+┌─────────────────┐
+│   AI Agent      │
+│  (Claude, GPT)  │
+└────────┬────────┘
+         │
+         │ Commands & Code
+         ▼
+┌─────────────────┐
+│  OpenSandbox    │
+│     SDK         │
+└────────┬────────┘
+         │
+         │ API Calls
+         ▼
+┌─────────────────┐
+│  Sandbox API    │
+│    Server       │
+└────────┬────────┘
+         │
+         │ Container Management
+         ▼
+┌─────────────────┐
+│  Isolated       │
+│  Container      │
+│  Runtime        │
+└─────────────────┘
+```
+
+## Security Considerations
+
+### Isolation
+
+- Each sandbox runs in a separate container with no network access to other sandboxes
+- File system is isolated from the host
+- Process isolation prevents privilege escalation
+
+### Resource Limits
+
+- Memory and CPU limits prevent resource exhaustion
+- Timeout controls prevent infinite loops
+- Disk space quotas prevent storage abuse
+
+### Authentication
+
+- API key authentication for production deployments
+- Optional TLS for encrypted communication
+- Audit logging for compliance
+
+## Best Practices
+
+### 1. Use Ephemeral Sandboxes
+
+Create a new sandbox for each task to ensure clean state:
+
+```python
+async def execute_task(code: str):
+    sandbox = await Sandbox.create("opensandbox/code-interpreter:v1.0.1")
+    try:
+        result = await sandbox.commands.run(f"python -c '{code}'")
+        return result
+    finally:
+        await sandbox.kill()
+```
+
+### 2. Set Appropriate Timeouts
+
+Prevent runaway processes with timeouts:
+
+```python
+sandbox = await Sandbox.create(
+    image="opensandbox/code-interpreter:v1.0.1",
+    timeout=timedelta(minutes=2)
+)
+```
+
+### 3. Handle Errors Gracefully
+
+Check execution results for errors:
+
+```python
+result = await sandbox.commands.run("python script.py")
+
+if result.error:
+    print(f"Error: {result.error.name} - {result.error.value}")
+else:
+    for line in result.logs.stdout:
+        print(line.text)
+```
+
+### 4. Use Background Processes for Long-Running Tasks
+
+```python
+# Start a long-running service
+await sandbox.commands.run(
+    "python server.py",
+    opts=RunCommandOpts(background=True)
+)
+
+# Get the endpoint to access the service
+endpoint = await sandbox.get_endpoint(8000)
+print(f"Service available at: {endpoint.endpoint}")
+```
+
+## Example Projects
+
+### Claude Code CLI
+
+Integrate Anthropic's Claude with OpenSandbox for interactive coding assistance.
+
+- **Location**: `examples/claude-code/`
+- **Features**: NPM package installation, Claude CLI integration, environment variable passing
+- **Code**: [View on GitHub](https://github.com/opensandbox-io/opensandbox/tree/main/examples/claude-code)
+
+### LangGraph Workflow
+
+Build complex agent workflows with state machines and decision nodes.
+
+- **Location**: `examples/langgraph/`
+- **Features**: Graph-driven control flow, retry logic, LLM-powered analysis
+- **Code**: [View on GitHub](https://github.com/opensandbox-io/opensandbox/tree/main/examples/langgraph)
+
+### Agent Sandbox
+
+General-purpose agent execution environment.
+
+- **Location**: `examples/agent-sandbox/`
+- **Features**: Multi-language support, dependency installation, file I/O
+- **Code**: [View on GitHub](https://github.com/opensandbox-io/opensandbox/tree/main/examples/agent-sandbox)
+
+## Related Resources
+
+<CardGroup cols={2}>
+  <Card title="Quick Start" icon="rocket" href="/quickstart">
+    Get started with OpenSandbox in 5 minutes
+  </Card>
+  <Card title="Python SDK" icon="python" href="/sdks/python">
+    Complete Python SDK reference
+  </Card>
+  <Card title="Browser Automation" icon="browser" href="/use-cases/browser-automation">
+    Automate browsers for web agents
+  </Card>
+  <Card title="API Reference" icon="code" href="/api-reference">
+    Full API documentation
+  </Card>
+</CardGroup>

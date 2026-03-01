@@ -1,0 +1,782 @@
+---
+title: C# SDK Reference
+description: Complete API reference for the OpenSandbox C# SDK
+---
+
+The OpenSandbox C# SDK provides secure, isolated execution environments with comprehensive file system access, command execution, and resource management capabilities.
+
+## Installation
+
+<CodeGroup>
+```bash .NET CLI
+dotnet add package Alibaba.OpenSandbox
+```
+
+```powershell Package Manager
+Install-Package Alibaba.OpenSandbox
+```
+</CodeGroup>
+
+## Core Classes
+
+### Sandbox
+
+Main class for creating and managing sandbox instances.
+
+#### Static Methods
+
+##### CreateAsync()
+
+Create a new sandbox instance with the specified configuration.
+
+```csharp
+using OpenSandbox;
+using OpenSandbox.Config;
+using OpenSandbox.Core;
+
+var config = new ConnectionConfig(new ConnectionConfigOptions
+{
+    Domain = "api.opensandbox.io",
+    ApiKey = "your-api-key",
+});
+
+await using var sandbox = await Sandbox.CreateAsync(new SandboxCreateOptions
+{
+    ConnectionConfig = config,
+    Image = "python:3.11",
+    TimeoutSeconds = 30 * 60,
+    Env = new Dictionary<string, string> { ["PYTHONPATH"] = "/workspace" },
+    Resource = new Dictionary<string, string> { ["cpu"] = "2", ["memory"] = "4Gi" },
+});
+```
+
+<ParamField path="options" type="SandboxCreateOptions" required>
+  Configuration options for sandbox creation.
+
+  <Expandable title="properties">
+    <ParamField path="ConnectionConfig" type="ConnectionConfig" required>
+      Connection configuration for API server.
+    </ParamField>
+
+    <ParamField path="Image" type="string" required>
+      Docker image to use.
+    </ParamField>
+
+    <ParamField path="TimeoutSeconds" type="int" default="600">
+      Automatic termination timeout (server-side TTL).
+    </ParamField>
+
+    <ParamField path="Entrypoint" type="string[]" default='["tail", "-f", "/dev/null"]'>
+      Container entrypoint command.
+    </ParamField>
+
+    <ParamField path="Resource" type="Dictionary<string, string>" default='{"cpu": "1", "memory": "2Gi"}'>
+      CPU and memory limits.
+    </ParamField>
+
+    <ParamField path="Env" type="Dictionary<string, string>">
+      Environment variables.
+    </ParamField>
+
+    <ParamField path="Metadata" type="Dictionary<string, string>">
+      Custom metadata tags.
+    </ParamField>
+
+    <ParamField path="NetworkPolicy" type="NetworkPolicy">
+      Optional outbound network policy (egress).
+    </ParamField>
+
+    <ParamField path="Volumes" type="Volume[]">
+      Optional storage mounts (Host / PVC, supports ReadOnly and SubPath).
+    </ParamField>
+
+    <ParamField path="Extensions" type="Dictionary<string, string>">
+      Extra server-defined fields.
+    </ParamField>
+
+    <ParamField path="SkipHealthCheck" type="bool" default="false">
+      Skip readiness checks (Running + health check).
+    </ParamField>
+
+    <ParamField path="HealthCheck" type="Func<Sandbox, Task<bool>>">
+      Custom readiness check function.
+    </ParamField>
+
+    <ParamField path="ReadyTimeoutSeconds" type="int" default="30">
+      Maximum time to wait for readiness.
+    </ParamField>
+
+    <ParamField path="HealthCheckPollingInterval" type="int" default="200">
+      Poll interval while waiting (milliseconds).
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+<ResponseField name="return" type="Task<Sandbox>">
+  Fully configured and ready Sandbox instance.
+</ResponseField>
+
+##### ConnectAsync()
+
+Connect to an existing sandbox instance by ID.
+
+```csharp
+var connected = await Sandbox.ConnectAsync(new SandboxConnectOptions
+{
+    SandboxId = "existing-sandbox-id",
+    ConnectionConfig = config
+});
+```
+
+<ParamField path="options" type="SandboxConnectOptions" required>
+  <Expandable title="properties">
+    <ParamField path="SandboxId" type="string" required>
+      ID of the existing sandbox.
+    </ParamField>
+
+    <ParamField path="ConnectionConfig" type="ConnectionConfig" required>
+      Connection configuration.
+    </ParamField>
+
+    <ParamField path="HealthCheck" type="Func<Sandbox, Task<bool>>">
+      Custom readiness check function.
+    </ParamField>
+
+    <ParamField path="ConnectTimeoutSeconds" type="int" default="30">
+      Maximum time to wait for readiness.
+    </ParamField>
+
+    <ParamField path="SkipHealthCheck" type="bool" default="false">
+      Skip readiness checks.
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+<ResponseField name="return" type="Task<Sandbox>">
+  Connected Sandbox instance.
+</ResponseField>
+
+#### Instance Methods
+
+##### GetInfoAsync()
+
+Get the current status of the sandbox.
+
+```csharp
+var info = await sandbox.GetInfoAsync();
+Console.WriteLine($"State: {info.Status.State}");
+Console.WriteLine($"Created: {info.CreatedAt}");
+Console.WriteLine($"Expires: {info.ExpiresAt}");
+```
+
+<ResponseField name="return" type="Task<SandboxInfo>">
+  Current sandbox status including state and metadata.
+</ResponseField>
+
+##### GetEndpointAsync()
+
+Get a specific network endpoint for the sandbox.
+
+```csharp
+var endpoint = await sandbox.GetEndpointAsync(80);
+Console.WriteLine(endpoint.EndpointAddress);
+```
+
+<ParamField path="port" type="int" required>
+  The port number to get the endpoint for.
+</ParamField>
+
+<ResponseField name="return" type="Task<SandboxEndpoint>">
+  Endpoint information (without scheme, e.g., "localhost:44772").
+</ResponseField>
+
+##### GetEndpointUrlAsync()
+
+Get a ready-to-use absolute URL for a port.
+
+```csharp
+var url = await sandbox.GetEndpointUrlAsync(80);
+Console.WriteLine(url); // e.g., "http://localhost:44772"
+```
+
+<ParamField path="port" type="int" required>
+  The port number to get the URL for.
+</ParamField>
+
+<ResponseField name="return" type="Task<string>">
+  Absolute URL with scheme.
+</ResponseField>
+
+##### RenewAsync()
+
+Renew the sandbox expiration time.
+
+```csharp
+await sandbox.RenewAsync(30 * 60); // 30 minutes
+```
+
+<ParamField path="timeoutSeconds" type="int" required>
+  Duration in seconds to extend the expiration.
+</ParamField>
+
+<ResponseField name="return" type="Task">
+  Task that completes when renewal is successful.
+</ResponseField>
+
+##### PauseAsync()
+
+Pause the sandbox while preserving its state.
+
+```csharp
+await sandbox.PauseAsync();
+```
+
+<ResponseField name="return" type="Task">
+  Task that completes when sandbox is paused.
+</ResponseField>
+
+##### ResumeAsync()
+
+Resume a previously paused sandbox.
+
+```csharp
+var resumed = await sandbox.ResumeAsync();
+```
+
+<ResponseField name="return" type="Task<Sandbox>">
+  Fresh, connected Sandbox instance.
+</ResponseField>
+
+##### KillAsync()
+
+Terminate the remote sandbox instance.
+
+```csharp
+await sandbox.KillAsync();
+```
+
+<ResponseField name="return" type="Task">
+  Task that completes when sandbox is terminated.
+</ResponseField>
+
+##### DisposeAsync()
+
+Close local resources associated with the sandbox.
+
+```csharp
+await sandbox.DisposeAsync();
+```
+
+<ResponseField name="return" type="ValueTask">
+  Task that completes when resources are closed.
+</ResponseField>
+
+#### Properties
+
+##### Commands
+
+Provides access to command execution operations.
+
+```csharp
+var execution = await sandbox.Commands.RunAsync("echo 'Hello World'");
+Console.WriteLine(execution.Logs.Stdout.FirstOrDefault()?.Text);
+```
+
+<ResponseField name="type" type="Commands">
+  Command execution interface.
+</ResponseField>
+
+##### Files
+
+Provides access to file system operations.
+
+```csharp
+await sandbox.Files.WriteFilesAsync(new[]
+{
+    new WriteEntry { Path = "/tmp/hello.txt", Data = "Hello World", Mode = 644 }
+});
+var content = await sandbox.Files.ReadFileAsync("/tmp/hello.txt");
+```
+
+<ResponseField name="type" type="Filesystem">
+  File system operations interface.
+</ResponseField>
+
+### SandboxManager
+
+Administrative interface for managing multiple sandbox instances.
+
+#### Static Methods
+
+##### Create()
+
+Create a SandboxManager instance.
+
+```csharp
+await using var manager = SandboxManager.Create(new SandboxManagerOptions
+{
+    ConnectionConfig = config
+});
+```
+
+<ParamField path="options" type="SandboxManagerOptions" required>
+  <Expandable title="properties">
+    <ParamField path="ConnectionConfig" type="ConnectionConfig" required>
+      Connection configuration.
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+<ResponseField name="return" type="SandboxManager">
+  Configured sandbox manager instance.
+</ResponseField>
+
+#### Instance Methods
+
+##### ListSandboxInfosAsync()
+
+List sandboxes with filtering options.
+
+```csharp
+var list = await manager.ListSandboxInfosAsync(new SandboxFilter
+{
+    States = new[] { SandboxStates.Running },
+    PageSize = 10
+});
+
+foreach (var s in list.Items)
+{
+    Console.WriteLine(s.Id);
+}
+```
+
+<ParamField path="filter" type="SandboxFilter" required>
+  <Expandable title="properties">
+    <ParamField path="States" type="string[]">
+      Filter by sandbox states.
+    </ParamField>
+
+    <ParamField path="PageSize" type="int">
+      Number of results per page.
+    </ParamField>
+
+    <ParamField path="Page" type="int">
+      Page number.
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+<ResponseField name="return" type="Task<PagedSandboxInfos>">
+  Paged sandbox information matching the filter criteria.
+</ResponseField>
+
+##### DisposeAsync()
+
+Close local resources associated with the manager.
+
+```csharp
+await manager.DisposeAsync();
+```
+
+<ResponseField name="return" type="ValueTask">
+  Task that completes when resources are closed.
+</ResponseField>
+
+## Service Interfaces
+
+### Commands
+
+Command execution service for sandbox environments.
+
+#### RunAsync()
+
+Execute a shell command in the sandbox.
+
+```csharp
+using OpenSandbox.Models;
+
+// Simple execution
+var execution = await sandbox.Commands.RunAsync("echo 'Hello World'");
+Console.WriteLine(execution.Logs.Stdout.FirstOrDefault()?.Text);
+
+// With streaming handlers
+var handlers = new ExecutionHandlers
+{
+    OnStdout = msg => { Console.WriteLine($"STDOUT: {msg.Text}"); return Task.CompletedTask; },
+    OnStderr = msg => { Console.Error.WriteLine($"STDERR: {msg.Text}"); return Task.CompletedTask; },
+    OnExecutionComplete = c => { Console.WriteLine($"Finished in {c.ExecutionTimeMs}ms"); return Task.CompletedTask; },
+};
+
+await sandbox.Commands.RunAsync(
+    "for i in 1 2 3; do echo \"Count $i\"; sleep 0.2; done",
+    handlers: handlers
+);
+```
+
+<ParamField path="command" type="string" required>
+  Shell command text to execute.
+</ParamField>
+
+<ParamField path="options" type="RunCommandOptions">
+  <Expandable title="properties">
+    <ParamField path="Background" type="bool">
+      Run command in background mode.
+    </ParamField>
+
+    <ParamField path="WorkingDirectory" type="string">
+      Working directory for command execution.
+    </ParamField>
+
+    <ParamField path="TimeoutSeconds" type="int">
+      Command execution timeout.
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+<ParamField path="handlers" type="ExecutionHandlers">
+  Optional handlers for streaming events.
+</ParamField>
+
+<ResponseField name="return" type="Task<Execution>">
+  Execution handle representing the running command.
+</ResponseField>
+
+#### GetCommandStatusAsync()
+
+Get the current running status for a command.
+
+```csharp
+var status = await sandbox.Commands.GetCommandStatusAsync(execution.Id!);
+Console.WriteLine($"running={status.Running}");
+```
+
+<ParamField path="executionId" type="string" required>
+  Unique identifier of the execution to query.
+</ParamField>
+
+<ResponseField name="return" type="Task<CommandStatus>">
+  CommandStatus describing running state and exit code.
+</ResponseField>
+
+#### GetBackgroundCommandLogsAsync()
+
+Get background command logs (non-streamed).
+
+```csharp
+var logs = await sandbox.Commands.GetBackgroundCommandLogsAsync(execution.Id!, cursor: 0);
+Console.WriteLine($"cursor={logs.Cursor}");
+```
+
+<ParamField path="executionId" type="string" required>
+  Unique identifier of the execution to query.
+</ParamField>
+
+<ParamField path="cursor" type="int?">
+  Optional line cursor for incremental reads.
+</ParamField>
+
+<ResponseField name="return" type="Task<CommandLogs>">
+  CommandLogs containing raw output and latest cursor.
+</ResponseField>
+
+### Filesystem
+
+Filesystem operations service for sandbox environments.
+
+#### ReadFileAsync()
+
+Read the content of a file as a string.
+
+```csharp
+var content = await sandbox.Files.ReadFileAsync("/tmp/hello.txt");
+Console.WriteLine($"Content: {content}");
+```
+
+<ParamField path="path" type="string" required>
+  The absolute or relative path to the file to read.
+</ParamField>
+
+<ResponseField name="return" type="Task<string>">
+  The file content as a string.
+</ResponseField>
+
+#### WriteFilesAsync()
+
+Write content to files.
+
+```csharp
+await sandbox.Files.WriteFilesAsync(new[]
+{
+    new WriteEntry { Path = "/tmp/hello.txt", Data = "Hello World", Mode = 644 }
+});
+```
+
+<ParamField path="entries" type="WriteEntry[]" required>
+  List of write entries specifying files and their content.
+</ParamField>
+
+<ResponseField name="return" type="Task">
+  Task that completes when files are written.
+</ResponseField>
+
+#### CreateDirectoriesAsync()
+
+Create directories.
+
+```csharp
+await sandbox.Files.CreateDirectoriesAsync(new[]
+{
+    new CreateDirectoryEntry { Path = "/tmp/demo", Mode = 755 }
+});
+```
+
+<ParamField path="entries" type="CreateDirectoryEntry[]" required>
+  List of directory entries.
+</ParamField>
+
+<ResponseField name="return" type="Task">
+  Task that completes when directories are created.
+</ResponseField>
+
+#### DeleteFilesAsync()
+
+Delete the specified files.
+
+```csharp
+await sandbox.Files.DeleteFilesAsync(new[] { "/tmp/hello.txt" });
+```
+
+<ParamField path="paths" type="string[]" required>
+  List of file paths to delete.
+</ParamField>
+
+<ResponseField name="return" type="Task">
+  Task that completes when files are deleted.
+</ResponseField>
+
+#### DeleteDirectoriesAsync()
+
+Delete the specified directories.
+
+```csharp
+await sandbox.Files.DeleteDirectoriesAsync(new[] { "/tmp/demo" });
+```
+
+<ParamField path="paths" type="string[]" required>
+  List of directory paths to delete.
+</ParamField>
+
+<ResponseField name="return" type="Task">
+  Task that completes when directories are deleted.
+</ResponseField>
+
+#### SearchAsync()
+
+Search for files and directories.
+
+```csharp
+var files = await sandbox.Files.SearchAsync(new SearchEntry { Path = "/tmp/demo", Pattern = "*.txt" });
+foreach (var file in files)
+{
+    Console.WriteLine(file.Path);
+}
+```
+
+<ParamField path="entry" type="SearchEntry" required>
+  <Expandable title="properties">
+    <ParamField path="Path" type="string" required>
+      Base path to search in.
+    </ParamField>
+
+    <ParamField path="Pattern" type="string">
+      Glob pattern for matching.
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+<ResponseField name="return" type="Task<List<EntryInfo>>">
+  List of matching file/directory information.
+</ResponseField>
+
+## Configuration
+
+### ConnectionConfig
+
+Connection configuration for API server communication.
+
+```csharp
+using OpenSandbox.Config;
+
+// Basic configuration
+var config = new ConnectionConfig(new ConnectionConfigOptions
+{
+    Domain = "api.opensandbox.io",
+    ApiKey = "your-key",
+    RequestTimeoutSeconds = 60,
+});
+
+// Advanced: custom headers
+var config2 = new ConnectionConfig(new ConnectionConfigOptions
+{
+    Domain = "api.opensandbox.io",
+    ApiKey = "your-key",
+    Headers = new Dictionary<string, string>
+    {
+        ["X-Custom-Header"] = "value"
+    },
+});
+```
+
+<ParamField path="options" type="ConnectionConfigOptions" required>
+  <Expandable title="properties">
+    <ParamField path="ApiKey" type="string">
+      API key for authentication (can also be set via `OPEN_SANDBOX_API_KEY` environment variable).
+    </ParamField>
+
+    <ParamField path="Domain" type="string" default="localhost:8080">
+      Sandbox service domain (can also be set via `OPEN_SANDBOX_DOMAIN` environment variable).
+    </ParamField>
+
+    <ParamField path="Protocol" type="ConnectionProtocol" default="Http">
+      HTTP protocol (Http/Https).
+    </ParamField>
+
+    <ParamField path="RequestTimeoutSeconds" type="int" default="30">
+      Request timeout applied to SDK HTTP calls.
+    </ParamField>
+
+    <ParamField path="UseServerProxy" type="bool" default="false">
+      Request server-proxied sandbox endpoint URLs.
+    </ParamField>
+
+    <ParamField path="Headers" type="Dictionary<string, string>">
+      Extra headers applied to every request.
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+## Diagnostics and Logging
+
+The SDK uses `Microsoft.Extensions.Logging` abstractions.
+
+```csharp
+using Microsoft.Extensions.Logging;
+using OpenSandbox.Config;
+
+using var loggerFactory = LoggerFactory.Create(builder =>
+{
+    builder.SetMinimumLevel(LogLevel.Debug);
+    builder.AddConsole();
+});
+
+var sandbox = await Sandbox.CreateAsync(new SandboxCreateOptions
+{
+    Image = "python:3.11",
+    ConnectionConfig = new ConnectionConfig(),
+    Diagnostics = new SdkDiagnosticsOptions
+    {
+        LoggerFactory = loggerFactory
+    }
+});
+```
+
+## Network Policy
+
+```csharp
+var sandbox = await Sandbox.CreateAsync(new SandboxCreateOptions
+{
+    ConnectionConfig = config,
+    Image = "python:3.11",
+    NetworkPolicy = new NetworkPolicy
+    {
+        DefaultAction = NetworkRuleAction.Deny,
+        Egress = new List<NetworkRule>
+        {
+            new() { Action = NetworkRuleAction.Allow, Target = "pypi.org" }
+        }
+    }
+});
+```
+
+## Exception Handling
+
+The SDK throws `SandboxException` and derived exceptions for various error conditions.
+
+```csharp
+try
+{
+    var execution = await sandbox.Commands.RunAsync("echo 'Hello Sandbox!'");
+    Console.WriteLine(execution.Logs.Stdout.FirstOrDefault()?.Text);
+}
+catch (SandboxReadyTimeoutException)
+{
+    Console.Error.WriteLine("Sandbox did not become ready before the configured timeout.");
+}
+catch (SandboxApiException ex)
+{
+    Console.Error.WriteLine($"API Error: status={ex.StatusCode}, requestId={ex.RequestId}, message={ex.Message}");
+}
+catch (SandboxException ex)
+{
+    Console.Error.WriteLine($"Sandbox Error: [{ex.Error.Code}] {ex.Error.Message}");
+}
+```
+
+## Supported Frameworks
+
+- .NET Standard 2.0 (for maximum compatibility with .NET Framework 4.6.1+, .NET Core 2.0+, Mono, Xamarin, etc.)
+- .NET Standard 2.1
+- .NET 6.0 (LTS)
+- .NET 7.0
+- .NET 8.0 (LTS)
+- .NET 9.0
+- .NET 10.0
+
+## Complete Example
+
+```csharp
+using OpenSandbox;
+using OpenSandbox.Config;
+using OpenSandbox.Core;
+using OpenSandbox.Models;
+
+var config = new ConnectionConfig(new ConnectionConfigOptions
+{
+    Domain = "api.opensandbox.io",
+    ApiKey = "your-api-key",
+});
+
+try
+{
+    await using var sandbox = await Sandbox.CreateAsync(new SandboxCreateOptions
+    {
+        ConnectionConfig = config,
+        Image = "python:3.11",
+        TimeoutSeconds = 30 * 60,
+    });
+
+    // Write a file
+    await sandbox.Files.WriteFilesAsync(new[]
+    {
+        new WriteEntry { Path = "/tmp/script.py", Data = "print('Hello World')", Mode = 644 }
+    });
+
+    // Execute command with streaming
+    var handlers = new ExecutionHandlers
+    {
+        OnStdout = msg => { Console.WriteLine($"Output: {msg.Text}"); return Task.CompletedTask; }
+    };
+    await sandbox.Commands.RunAsync("python /tmp/script.py", handlers: handlers);
+
+    // Get info
+    var info = await sandbox.GetInfoAsync();
+    Console.WriteLine($"State: {info.Status.State}");
+
+    // Cleanup
+    await sandbox.KillAsync();
+}
+catch (SandboxException ex)
+{
+    Console.Error.WriteLine($"Sandbox Error: [{ex.Error.Code}] {ex.Error.Message}");
+}
+```

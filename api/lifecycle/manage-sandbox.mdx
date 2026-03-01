@@ -1,0 +1,543 @@
+---
+title: "Manage Sandbox"
+description: "Pause, resume, delete, and renew sandbox expiration"
+---
+
+This page documents the lifecycle management endpoints for controlling sandbox state transitions and expiration.
+
+## Pause Sandbox
+
+<api method="POST" path="/v1/sandboxes/{sandboxId}/pause" />
+
+Pause a running sandbox while preserving its state. Poll `GET /v1/sandboxes/{sandboxId}` to track state transition to Paused.
+
+### Path Parameters
+
+<ParamField path="sandboxId" type="string" required>
+  Unique sandbox identifier
+</ParamField>
+
+### Response
+
+<ResponseField name="202" type="Accepted">
+  Pause operation accepted.
+  
+  Sandbox will transition to Pausing state. Poll `GET /v1/sandboxes/{sandboxId}` to track progress.
+</ResponseField>
+
+### Response Headers
+
+<ResponseField name="X-Request-ID" type="string">
+  Unique request identifier for tracing
+</ResponseField>
+
+### Error Responses
+
+<ResponseField name="401" type="Unauthorized">
+  Authentication credentials are missing or invalid
+</ResponseField>
+
+<ResponseField name="403" type="Forbidden">
+  The authenticated user lacks permission for this operation
+</ResponseField>
+
+<ResponseField name="404" type="Not Found">
+  The requested sandbox does not exist
+</ResponseField>
+
+<ResponseField name="409" type="Conflict">
+  The operation conflicts with the current state
+</ResponseField>
+
+<ResponseField name="500" type="Internal Server Error">
+  An unexpected server error occurred
+</ResponseField>
+
+### Example Request
+
+```bash
+curl -X POST http://localhost:8080/v1/sandboxes/sandbox-abc123/pause \
+  -H "OPEN-SANDBOX-API-KEY: your-api-key"
+```
+
+---
+
+## Resume Sandbox
+
+<api method="POST" path="/v1/sandboxes/{sandboxId}/resume" />
+
+Resume execution of a paused sandbox. Poll `GET /v1/sandboxes/{sandboxId}` to track state transition to Running.
+
+### Path Parameters
+
+<ParamField path="sandboxId" type="string" required>
+  Unique sandbox identifier
+</ParamField>
+
+### Response
+
+<ResponseField name="202" type="Accepted">
+  Resume operation accepted.
+  
+  Sandbox will transition from Paused → Running. Poll `GET /v1/sandboxes/{sandboxId}` to track progress.
+</ResponseField>
+
+### Response Headers
+
+<ResponseField name="X-Request-ID" type="string">
+  Unique request identifier for tracing
+</ResponseField>
+
+### Error Responses
+
+<ResponseField name="401" type="Unauthorized">
+  Authentication credentials are missing or invalid
+</ResponseField>
+
+<ResponseField name="403" type="Forbidden">
+  The authenticated user lacks permission for this operation
+</ResponseField>
+
+<ResponseField name="404" type="Not Found">
+  The requested sandbox does not exist
+</ResponseField>
+
+<ResponseField name="409" type="Conflict">
+  The operation conflicts with the current state
+</ResponseField>
+
+<ResponseField name="500" type="Internal Server Error">
+  An unexpected server error occurred
+</ResponseField>
+
+### Example Request
+
+```bash
+curl -X POST http://localhost:8080/v1/sandboxes/sandbox-abc123/resume \
+  -H "OPEN-SANDBOX-API-KEY: your-api-key"
+```
+
+---
+
+## Delete Sandbox
+
+<api method="DELETE" path="/v1/sandboxes/{sandboxId}" />
+
+Delete a sandbox, terminating its execution. The sandbox will transition through Stopping state to Terminated.
+
+### Path Parameters
+
+<ParamField path="sandboxId" type="string" required>
+  Unique sandbox identifier
+</ParamField>
+
+### Response
+
+<ResponseField name="204" type="No Content">
+  Sandbox successfully deleted.
+  
+  Sandbox has been scheduled for termination and will transition to Stopping state, then Terminated.
+</ResponseField>
+
+### Response Headers
+
+<ResponseField name="X-Request-ID" type="string">
+  Unique request identifier for tracing
+</ResponseField>
+
+### Error Responses
+
+<ResponseField name="401" type="Unauthorized">
+  Authentication credentials are missing or invalid
+</ResponseField>
+
+<ResponseField name="403" type="Forbidden">
+  The authenticated user lacks permission for this operation
+</ResponseField>
+
+<ResponseField name="404" type="Not Found">
+  The requested sandbox does not exist
+</ResponseField>
+
+<ResponseField name="409" type="Conflict">
+  The operation conflicts with the current state
+</ResponseField>
+
+<ResponseField name="500" type="Internal Server Error">
+  An unexpected server error occurred
+</ResponseField>
+
+### Example Request
+
+```bash
+curl -X DELETE http://localhost:8080/v1/sandboxes/sandbox-abc123 \
+  -H "OPEN-SANDBOX-API-KEY: your-api-key"
+```
+
+---
+
+## Renew Sandbox Expiration
+
+<api method="POST" path="/v1/sandboxes/{sandboxId}/renew-expiration" />
+
+Renew the absolute expiration time of a sandbox.
+
+### Path Parameters
+
+<ParamField path="sandboxId" type="string" required>
+  Unique sandbox identifier
+</ParamField>
+
+### Request Body
+
+<ParamField body="expiresAt" type="string" required>
+  New absolute expiration time in UTC (RFC 3339 format).
+  
+  Must be in the future and after the current expiresAt time.
+  
+  Example: `"2025-11-16T14:30:45Z"`
+</ParamField>
+
+### Response
+
+<ResponseField name="expiresAt" type="string">
+  The new absolute expiration time in UTC (RFC 3339 format).
+  
+  Example: `"2025-11-16T14:30:45Z"`
+</ResponseField>
+
+### Response Headers
+
+<ResponseField name="X-Request-ID" type="string">
+  Unique request identifier for tracing
+</ResponseField>
+
+### Status Code
+
+<ResponseField name="200" type="OK">
+  Sandbox expiration updated successfully.
+  
+  Returns only the updated expiresAt field.
+</ResponseField>
+
+### Error Responses
+
+<ResponseField name="400" type="Bad Request">
+  The request was invalid or malformed
+</ResponseField>
+
+<ResponseField name="401" type="Unauthorized">
+  Authentication credentials are missing or invalid
+</ResponseField>
+
+<ResponseField name="403" type="Forbidden">
+  The authenticated user lacks permission for this operation
+</ResponseField>
+
+<ResponseField name="404" type="Not Found">
+  The requested sandbox does not exist
+</ResponseField>
+
+<ResponseField name="409" type="Conflict">
+  The operation conflicts with the current state
+</ResponseField>
+
+<ResponseField name="500" type="Internal Server Error">
+  An unexpected server error occurred
+</ResponseField>
+
+### Example Request
+
+```bash
+curl -X POST http://localhost:8080/v1/sandboxes/sandbox-abc123/renew-expiration \
+  -H "OPEN-SANDBOX-API-KEY: your-api-key" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "expiresAt": "2025-11-16T14:30:45Z"
+  }'
+```
+
+### Example Response
+
+```json
+{
+  "expiresAt": "2025-11-16T14:30:45Z"
+}
+```
+
+---
+
+## Get Sandbox
+
+<api method="GET" path="/v1/sandboxes/{sandboxId}" />
+
+Returns the complete sandbox information including image specification and entrypoint.
+
+### Path Parameters
+
+<ParamField path="sandboxId" type="string" required>
+  Unique sandbox identifier
+</ParamField>
+
+### Response
+
+<ResponseField name="id" type="string">
+  Unique sandbox identifier
+</ResponseField>
+
+<ResponseField name="image" type="object">
+  Container image specification used to provision this sandbox
+  
+  <Expandable title="properties">
+    <ResponseField name="uri" type="string">
+      Container image URI in standard format
+    </ResponseField>
+    
+    <ResponseField name="auth" type="object">
+      Registry authentication credentials
+      
+      <Expandable title="properties">
+        <ResponseField name="username" type="string">
+          Registry username or service account
+        </ResponseField>
+        
+        <ResponseField name="password" type="string">
+          Registry password or authentication token
+        </ResponseField>
+      </Expandable>
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+<ResponseField name="status" type="object">
+  Current lifecycle status and detailed state information
+  
+  <Expandable title="properties">
+    <ResponseField name="state" type="string">
+      Current lifecycle state of the sandbox
+    </ResponseField>
+    
+    <ResponseField name="reason" type="string">
+      Short machine-readable reason code for the current state
+    </ResponseField>
+    
+    <ResponseField name="message" type="string">
+      Human-readable message describing the current state
+    </ResponseField>
+    
+    <ResponseField name="lastTransitionAt" type="string">
+      Timestamp of the last state transition (RFC 3339 format)
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+<ResponseField name="metadata" type="object">
+  Custom metadata from creation request
+</ResponseField>
+
+<ResponseField name="entrypoint" type="array">
+  Entry process specification
+</ResponseField>
+
+<ResponseField name="expiresAt" type="string">
+  Timestamp when sandbox will auto-terminate (RFC 3339 format)
+</ResponseField>
+
+<ResponseField name="createdAt" type="string">
+  Sandbox creation timestamp (RFC 3339 format)
+</ResponseField>
+
+### Response Headers
+
+<ResponseField name="X-Request-ID" type="string">
+  Unique request identifier for tracing
+</ResponseField>
+
+### Status Code
+
+<ResponseField name="200" type="OK">
+  Sandbox current state and metadata
+</ResponseField>
+
+### Error Responses
+
+<ResponseField name="401" type="Unauthorized">
+  Authentication credentials are missing or invalid
+</ResponseField>
+
+<ResponseField name="403" type="Forbidden">
+  The authenticated user lacks permission for this operation
+</ResponseField>
+
+<ResponseField name="404" type="Not Found">
+  The requested sandbox does not exist
+</ResponseField>
+
+<ResponseField name="500" type="Internal Server Error">
+  An unexpected server error occurred
+</ResponseField>
+
+### Example Request
+
+```bash
+curl -X GET http://localhost:8080/v1/sandboxes/sandbox-abc123 \
+  -H "OPEN-SANDBOX-API-KEY: your-api-key"
+```
+
+### Example Response
+
+```json
+{
+  "id": "sandbox-abc123",
+  "image": {
+    "uri": "python:3.11"
+  },
+  "status": {
+    "state": "Running",
+    "reason": "running",
+    "message": "Sandbox is running",
+    "lastTransitionAt": "2026-03-01T10:31:00Z"
+  },
+  "metadata": {
+    "name": "My Python Sandbox"
+  },
+  "entrypoint": ["python", "/app/main.py"],
+  "expiresAt": "2026-03-01T11:30:00Z",
+  "createdAt": "2026-03-01T10:30:00Z"
+}
+```
+
+---
+
+## List Sandboxes
+
+<api method="GET" path="/v1/sandboxes" />
+
+List all sandboxes with optional filtering and pagination using query parameters. All filter conditions use AND logic. Multiple `state` parameters use OR logic within states.
+
+### Query Parameters
+
+<ParamField query="state" type="array">
+  Filter by lifecycle state. Pass multiple times for OR logic.
+  
+  Example: `?state=Running&state=Paused`
+</ParamField>
+
+<ParamField query="metadata" type="string">
+  Arbitrary metadata key-value pairs for filtering. Keys and values must be url encoded.
+  
+  Example: To filter by `project=Apollo` and `note=Demo Test`:
+  
+  `?metadata=project%3DApollo%26note%3DDemo%252520Test`
+</ParamField>
+
+<ParamField query="page" type="integer">
+  Page number for pagination
+  
+  Default: 1, Minimum: 1
+</ParamField>
+
+<ParamField query="pageSize" type="integer">
+  Number of items per page
+  
+  Default: 20, Minimum: 1
+</ParamField>
+
+### Response
+
+<ResponseField name="items" type="array">
+  Array of sandbox objects
+</ResponseField>
+
+<ResponseField name="pagination" type="object">
+  Pagination metadata for list responses
+  
+  <Expandable title="properties">
+    <ResponseField name="page" type="integer">
+      Current page number
+    </ResponseField>
+    
+    <ResponseField name="pageSize" type="integer">
+      Number of items per page
+    </ResponseField>
+    
+    <ResponseField name="totalItems" type="integer">
+      Total number of items matching the filter
+    </ResponseField>
+    
+    <ResponseField name="totalPages" type="integer">
+      Total number of pages
+    </ResponseField>
+    
+    <ResponseField name="hasNextPage" type="boolean">
+      Whether there are more pages after the current one
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+### Response Headers
+
+<ResponseField name="X-Request-ID" type="string">
+  Unique request identifier for tracing
+</ResponseField>
+
+### Status Code
+
+<ResponseField name="200" type="OK">
+  Paginated collection of sandboxes
+</ResponseField>
+
+### Error Responses
+
+<ResponseField name="400" type="Bad Request">
+  The request was invalid or malformed
+</ResponseField>
+
+<ResponseField name="401" type="Unauthorized">
+  Authentication credentials are missing or invalid
+</ResponseField>
+
+<ResponseField name="500" type="Internal Server Error">
+  An unexpected server error occurred
+</ResponseField>
+
+### Example Request
+
+```bash
+curl -X GET "http://localhost:8080/v1/sandboxes?state=Running&page=1&pageSize=20" \
+  -H "OPEN-SANDBOX-API-KEY: your-api-key"
+```
+
+### Example Response
+
+```json
+{
+  "items": [
+    {
+      "id": "sandbox-abc123",
+      "image": {
+        "uri": "python:3.11"
+      },
+      "status": {
+        "state": "Running",
+        "reason": "running",
+        "message": "Sandbox is running",
+        "lastTransitionAt": "2026-03-01T10:31:00Z"
+      },
+      "metadata": {
+        "name": "My Python Sandbox"
+      },
+      "entrypoint": ["python", "/app/main.py"],
+      "expiresAt": "2026-03-01T11:30:00Z",
+      "createdAt": "2026-03-01T10:30:00Z"
+    }
+  ],
+  "pagination": {
+    "page": 1,
+    "pageSize": 20,
+    "totalItems": 1,
+    "totalPages": 1,
+    "hasNextPage": false
+  }
+}
+```

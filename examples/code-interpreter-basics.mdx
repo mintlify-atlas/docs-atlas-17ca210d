@@ -1,0 +1,370 @@
+---
+title: 'Code Interpreter Basics'
+description: 'Execute code in multiple languages using the Code Interpreter SDK'
+icon: 'terminal'
+---
+
+The Code Interpreter SDK allows you to execute code in multiple programming languages within an OpenSandbox environment. This guide demonstrates how to run Python, Java, Go, and TypeScript code.
+
+## Overview
+
+The Code Interpreter provides:
+
+- **Multi-language support**: Python, Java, Go, TypeScript, and more
+- **Isolated execution**: Each code execution runs in a secure sandbox
+- **Rich output**: Capture stdout, stderr, and return values
+- **Error handling**: Detailed error messages and stack traces
+
+## Setup
+
+<Steps>
+  <Step title="Install dependencies">
+    Install the OpenSandbox Code Interpreter SDK:
+
+    ```bash
+    uv pip install opensandbox opensandbox-code-interpreter
+    ```
+  </Step>
+
+  <Step title="Pull the Code Interpreter image">
+    Download the prebuilt Docker image:
+
+    ```bash
+    docker pull sandbox-registry.cn-zhangjiakou.cr.aliyuncs.com/opensandbox/code-interpreter:v1.0.1
+
+    # Or use Docker Hub
+    # docker pull opensandbox/code-interpreter:v1.0.1
+    ```
+  </Step>
+
+  <Step title="Start the OpenSandbox server">
+    Initialize and start the local server:
+
+    ```bash
+    uv pip install opensandbox-server
+    opensandbox-server init-config ~/.sandbox.toml --example docker
+    opensandbox-server
+    ```
+  </Step>
+</Steps>
+
+## Running Code in Different Languages
+
+<Steps>
+  <Step title="Create a sandbox and interpreter">
+    Set up the environment with proper configuration:
+
+    ```python
+    import asyncio
+    import os
+    from datetime import timedelta
+
+    from code_interpreter import CodeInterpreter, SupportedLanguage
+    from opensandbox import Sandbox
+    from opensandbox.config import ConnectionConfig
+
+    async def main() -> None:
+        # Configure connection
+        domain = os.getenv("SANDBOX_DOMAIN", "localhost:8080")
+        api_key = os.getenv("SANDBOX_API_KEY")
+        image = os.getenv(
+            "SANDBOX_IMAGE",
+            "sandbox-registry.cn-zhangjiakou.cr.aliyuncs.com/opensandbox/code-interpreter:v1.0.1",
+        )
+
+        config = ConnectionConfig(
+            domain=domain,
+            api_key=api_key,
+            request_timeout=timedelta(seconds=60),
+        )
+
+        # Create sandbox
+        sandbox = await Sandbox.create(
+            image,
+            connection_config=config,
+            entrypoint=["/opt/opensandbox/code-interpreter.sh"]
+        )
+
+        async with sandbox:
+            # Create interpreter
+            interpreter = await CodeInterpreter.create(sandbox=sandbox)
+    ```
+  </Step>
+
+  <Step title="Execute Python code">
+    Run Python code and capture both output and return values:
+
+    ```python
+            # Python example: show runtime info and return a calculation
+            py_exec = await interpreter.codes.run(
+                "import platform\n"
+                "print('Hello from Python!')\n"
+                "result = {'py': platform.python_version(), 'sum': 2 + 2}\n"
+                "result",
+                language=SupportedLanguage.PYTHON,
+            )
+            
+            print("\n=== Python example ===")
+            for msg in py_exec.logs.stdout:
+                print(f"[Python stdout] {msg.text}")
+            if py_exec.result:
+                for res in py_exec.result:
+                    print(f"[Python result] {res.text}")
+    ```
+
+    **Output:**
+    ```text
+    === Python example ===
+    [Python stdout] Hello from Python!
+    [Python result] {'py': '3.14.2', 'sum': 4}
+    ```
+  </Step>
+
+  <Step title="Execute Java code">
+    Run Java code snippets without boilerplate:
+
+    ```python
+            # Java example: print to stdout and return the final result
+            java_exec = await interpreter.codes.run(
+                "System.out.println(\"Hello from Java!\");\n"
+                "int result = 2 + 3;\n"
+                "System.out.println(\"2 + 3 = \" + result);\n"
+                "result",
+                language=SupportedLanguage.JAVA,
+            )
+            
+            print("\n=== Java example ===")
+            for msg in java_exec.logs.stdout:
+                print(f"[Java stdout] {msg.text}")
+            if java_exec.result:
+                for res in java_exec.result:
+                    print(f"[Java result] {res.text}")
+            if java_exec.error:
+                print(f"[Java error] {java_exec.error.name}: {java_exec.error.value}")
+    ```
+
+    **Output:**
+    ```text
+    === Java example ===
+    [Java stdout] Hello from Java!
+    [Java stdout] 2 + 3 = 5
+    [Java result] 5
+    ```
+  </Step>
+
+  <Step title="Execute Go code">
+    Run complete Go programs with main function:
+
+    ```python
+            # Go example: demonstrate a main function structure
+            go_exec = await interpreter.codes.run(
+                "package main\n"
+                "import \"fmt\"\n"
+                "func main() {\n"
+                "    fmt.Println(\"Hello from Go!\")\n"
+                "    sum := 3 + 4\n"
+                "    fmt.Println(\"3 + 4 =\", sum)\n"
+                "}",
+                language=SupportedLanguage.GO,
+            )
+            
+            print("\n=== Go example ===")
+            for msg in go_exec.logs.stdout:
+                print(f"[Go stdout] {msg.text}")
+            if go_exec.error:
+                print(f"[Go error] {go_exec.error.name}: {go_exec.error.value}")
+    ```
+
+    **Output:**
+    ```text
+    === Go example ===
+    [Go stdout] Hello from Go!
+    3 + 4 = 7
+    ```
+  </Step>
+
+  <Step title="Execute TypeScript code">
+    Run TypeScript with full type support:
+
+    ```python
+            # TypeScript example: use typing and sum an array
+            ts_exec = await interpreter.codes.run(
+                "console.log('Hello from TypeScript!');\n"
+                "const nums: number[] = [1, 2, 3];\n"
+                "console.log('sum =', nums.reduce((a, b) => a + b, 0));",
+                language=SupportedLanguage.TYPESCRIPT,
+            )
+            
+            print("\n=== TypeScript example ===")
+            for msg in ts_exec.logs.stdout:
+                print(f"[TypeScript stdout] {msg.text}")
+            if ts_exec.error:
+                print(f"[TypeScript error] {ts_exec.error.name}: {ts_exec.error.value}")
+
+            # Cleanup
+            await sandbox.kill()
+
+    if __name__ == "__main__":
+        asyncio.run(main())
+    ```
+
+    **Output:**
+    ```text
+    === TypeScript example ===
+    [TypeScript stdout] Hello from TypeScript!
+    [TypeScript stdout] sum = 6
+    ```
+  </Step>
+</Steps>
+
+## Complete Example
+
+Here's the full working example:
+
+```python
+import asyncio
+import os
+from datetime import timedelta
+
+from code_interpreter import CodeInterpreter, SupportedLanguage
+from opensandbox import Sandbox
+from opensandbox.config import ConnectionConfig
+
+
+async def main() -> None:
+    domain = os.getenv("SANDBOX_DOMAIN", "localhost:8080")
+    api_key = os.getenv("SANDBOX_API_KEY")
+    image = os.getenv(
+        "SANDBOX_IMAGE",
+        "sandbox-registry.cn-zhangjiakou.cr.aliyuncs.com/opensandbox/code-interpreter:v1.0.1",
+    )
+
+    config = ConnectionConfig(
+        domain=domain,
+        api_key=api_key,
+        request_timeout=timedelta(seconds=60),
+    )
+
+    sandbox = await Sandbox.create(
+        image,
+        connection_config=config,
+        entrypoint=["/opt/opensandbox/code-interpreter.sh"]
+    )
+
+    async with sandbox:
+        interpreter = await CodeInterpreter.create(sandbox=sandbox)
+
+        # Python example
+        py_exec = await interpreter.codes.run(
+            "import platform\n"
+            "print('Hello from Python!')\n"
+            "result = {'py': platform.python_version(), 'sum': 2 + 2}\n"
+            "result",
+            language=SupportedLanguage.PYTHON,
+        )
+        print("\n=== Python example ===")
+        for msg in py_exec.logs.stdout:
+            print(f"[Python stdout] {msg.text}")
+        if py_exec.result:
+            for res in py_exec.result:
+                print(f"[Python result] {res.text}")
+
+        # Java example
+        java_exec = await interpreter.codes.run(
+            "System.out.println(\"Hello from Java!\");\n"
+            "int result = 2 + 3;\n"
+            "System.out.println(\"2 + 3 = \" + result);\n"
+            "result",
+            language=SupportedLanguage.JAVA,
+        )
+        print("\n=== Java example ===")
+        for msg in java_exec.logs.stdout:
+            print(f"[Java stdout] {msg.text}")
+        if java_exec.result:
+            for res in java_exec.result:
+                print(f"[Java result] {res.text}")
+
+        # Go example
+        go_exec = await interpreter.codes.run(
+            "package main\n"
+            "import \"fmt\"\n"
+            "func main() {\n"
+            "    fmt.Println(\"Hello from Go!\")\n"
+            "    sum := 3 + 4\n"
+            "    fmt.Println(\"3 + 4 =\", sum)\n"
+            "}",
+            language=SupportedLanguage.GO,
+        )
+        print("\n=== Go example ===")
+        for msg in go_exec.logs.stdout:
+            print(f"[Go stdout] {msg.text}")
+
+        # TypeScript example
+        ts_exec = await interpreter.codes.run(
+            "console.log('Hello from TypeScript!');\n"
+            "const nums: number[] = [1, 2, 3];\n"
+            "console.log('sum =', nums.reduce((a, b) => a + b, 0));",
+            language=SupportedLanguage.TYPESCRIPT,
+        )
+        print("\n=== TypeScript example ===")
+        for msg in ts_exec.logs.stdout:
+            print(f"[TypeScript stdout] {msg.text}")
+
+        await sandbox.kill()
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
+```
+
+## Environment Variables
+
+You can customize the behavior using environment variables:
+
+| Variable | Description | Default |
+|----------|-------------|----------|
+| `SANDBOX_DOMAIN` | Sandbox service address | `localhost:8080` |
+| `SANDBOX_API_KEY` | API key for authentication | None |
+| `SANDBOX_IMAGE` | Docker image to use | `sandbox-registry.cn-zhangjiakou.cr.aliyuncs.com/opensandbox/code-interpreter:v1.0.1` |
+
+## Supported Languages
+
+The Code Interpreter SDK supports:
+
+- **Python** - Full Python 3.x support with pip packages
+- **Java** - Java 11+ with Maven dependencies
+- **Go** - Go 1.20+ with module support
+- **TypeScript** - TypeScript with Node.js runtime
+- **JavaScript** - ES6+ JavaScript
+- **Bash** - Shell script execution
+
+## Error Handling
+
+Always check for errors in code execution:
+
+```python
+result = await interpreter.codes.run(code, language=SupportedLanguage.PYTHON)
+
+if result.error:
+    print(f"Error: {result.error.name}")
+    print(f"Message: {result.error.value}")
+else:
+    print(f"Success: {result.result}")
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="File Operations" icon="folder" href="/examples/file-operations">
+    Learn to read and write files in sandboxes
+  </Card>
+  <Card title="Advanced Examples" icon="rocket" href="https://github.com/alibaba/OpenSandbox/tree/main/examples">
+    Explore browser automation, ML training, and more
+  </Card>
+  <Card title="API Reference" icon="book" href="/api-reference/python/code-interpreter">
+    Code Interpreter API documentation
+  </Card>
+  <Card title="Troubleshooting" icon="wrench" href="/essentials/troubleshooting">
+    Common issues and solutions
+  </Card>
+</CardGroup>

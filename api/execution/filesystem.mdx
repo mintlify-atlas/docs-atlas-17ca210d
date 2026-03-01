@@ -1,0 +1,775 @@
+---
+title: "Filesystem Operations"
+description: "Complete file and directory operations with permissions management"
+---
+
+The Filesystem API provides comprehensive file and directory management capabilities within the sandbox, including CRUD operations, permission management, search, and batch operations.
+
+## Get File Metadata
+
+<RequestExample>
+```bash cURL Single File
+curl -X GET "http://localhost:44772/files/info?path=/workspace/file.txt" \
+  -H "X-EXECD-ACCESS-TOKEN: your-token"
+```
+
+```bash cURL Multiple Files
+curl -X GET "http://localhost:44772/files/info?path=/workspace/file1.txt&path=/workspace/file2.py" \
+  -H "X-EXECD-ACCESS-TOKEN: your-token"
+```
+
+```python Python
+import requests
+
+response = requests.get(
+    "http://localhost:44772/files/info",
+    headers={"X-EXECD-ACCESS-TOKEN": "your-token"},
+    params={"path": ["/workspace/file.txt", "/workspace/data.csv"]}
+)
+
+files_info = response.json()
+for path, info in files_info.items():
+    print(f"{path}: {info['size']} bytes, mode {info['mode']}")
+```
+</RequestExample>
+
+Retrieves detailed metadata for one or multiple files including permissions, owner, group, size, and modification time.
+
+<ParamField query="path" type="array" required>
+  File path(s) to get info for (can be specified multiple times)
+</ParamField>
+
+<ResponseField name="[path]" type="object">
+  Map of file paths to FileInfo objects
+  
+  <Expandable title="FileInfo properties">
+    <ResponseField name="path" type="string">
+      Absolute file path
+    </ResponseField>
+    
+    <ResponseField name="size" type="integer">
+      File size in bytes
+    </ResponseField>
+    
+    <ResponseField name="modified_at" type="string">
+      Last modification time (RFC3339 format)
+    </ResponseField>
+    
+    <ResponseField name="created_at" type="string">
+      File creation time (RFC3339 format)
+    </ResponseField>
+    
+    <ResponseField name="owner" type="string">
+      File owner username
+    </ResponseField>
+    
+    <ResponseField name="group" type="string">
+      File group name
+    </ResponseField>
+    
+    <ResponseField name="mode" type="integer">
+      File permissions in octal format (e.g., 755)
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+<ResponseExample>
+```json 200
+{
+  "/workspace/file.txt": {
+    "path": "/workspace/file.txt",
+    "size": 2048,
+    "modified_at": "2025-11-16T14:30:45Z",
+    "created_at": "2025-11-16T14:30:45Z",
+    "owner": "admin",
+    "group": "admin",
+    "mode": 644
+  },
+  "/workspace/data.csv": {
+    "path": "/workspace/data.csv",
+    "size": 10240,
+    "modified_at": "2025-11-16T15:20:10Z",
+    "created_at": "2025-11-16T15:20:10Z",
+    "owner": "admin",
+    "group": "admin",
+    "mode": 644
+  }
+}
+```
+
+```json 404
+{
+  "code": "FILE_NOT_FOUND",
+  "message": "file not found"
+}
+```
+</ResponseExample>
+
+---
+
+## Delete Files
+
+<RequestExample>
+```bash cURL
+curl -X DELETE "http://localhost:44772/files?path=/workspace/temp.txt" \
+  -H "X-EXECD-ACCESS-TOKEN: your-token"
+```
+
+```python Python
+import requests
+
+response = requests.delete(
+    "http://localhost:44772/files",
+    headers={"X-EXECD-ACCESS-TOKEN": "your-token"},
+    params={"path": ["/workspace/temp.txt", "/workspace/old.log"]}
+)
+
+if response.status_code == 200:
+    print("Files deleted successfully")
+```
+</RequestExample>
+
+Deletes one or multiple files from the sandbox. Only removes files, not directories. Use `DELETE /directories` for directory removal.
+
+<ParamField query="path" type="array" required>
+  File path(s) to delete (can be specified multiple times)
+</ParamField>
+
+<ResponseExample>
+```json 200
+{}
+```
+</ResponseExample>
+
+---
+
+## Change File Permissions
+
+<RequestExample>
+```bash cURL
+curl -X POST http://localhost:44772/files/permissions \
+  -H "X-EXECD-ACCESS-TOKEN: your-token" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "/workspace/script.sh": {
+      "owner": "admin",
+      "group": "admin",
+      "mode": 755
+    },
+    "/workspace/config.json": {
+      "owner": "admin",
+      "group": "admin",
+      "mode": 644
+    }
+  }'
+```
+
+```python Python
+import requests
+
+response = requests.post(
+    "http://localhost:44772/files/permissions",
+    headers={
+        "X-EXECD-ACCESS-TOKEN": "your-token",
+        "Content-Type": "application/json"
+    },
+    json={
+        "/workspace/script.sh": {
+            "owner": "admin",
+            "group": "admin",
+            "mode": 755
+        }
+    }
+)
+
+if response.status_code == 200:
+    print("Permissions updated")
+```
+</RequestExample>
+
+Changes permissions (mode), owner, and group for one or multiple files. Accepts a map of file paths to permission settings.
+
+<ParamField body="[path]" type="object" required>
+  Map of file paths to Permission objects
+  
+  <Expandable title="Permission properties">
+    <ParamField body="owner" type="string">
+      Owner username
+    </ParamField>
+    
+    <ParamField body="group" type="string">
+      Group name
+    </ParamField>
+    
+    <ParamField body="mode" type="integer" required>
+      Permission mode in octal format (e.g., 644, 755)
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+<ResponseExample>
+```json 200
+{}
+```
+</ResponseExample>
+
+---
+
+## Rename or Move Files
+
+<RequestExample>
+```bash cURL
+curl -X POST http://localhost:44772/files/mv \
+  -H "X-EXECD-ACCESS-TOKEN: your-token" \
+  -H "Content-Type: application/json" \
+  -d '[
+    {
+      "src": "/workspace/old_name.txt",
+      "dest": "/workspace/new_name.txt"
+    },
+    {
+      "src": "/workspace/file.py",
+      "dest": "/archive/file.py"
+    }
+  ]'
+```
+
+```python Python
+import requests
+
+response = requests.post(
+    "http://localhost:44772/files/mv",
+    headers={
+        "X-EXECD-ACCESS-TOKEN": "your-token",
+        "Content-Type": "application/json"
+    },
+    json=[
+        {
+            "src": "/workspace/old_name.txt",
+            "dest": "/workspace/new_name.txt"
+        }
+    ]
+)
+
+if response.status_code == 200:
+    print("Files moved successfully")
+```
+</RequestExample>
+
+Renames or moves one or multiple files to new paths. Can be used for both renaming within the same directory and moving to different directories. Target directory must exist.
+
+<ParamField body="operations" type="array" required>
+  Array of rename/move operations
+  
+  <Expandable title="Operation properties">
+    <ParamField body="src" type="string" required>
+      Source file path
+    </ParamField>
+    
+    <ParamField body="dest" type="string" required>
+      Destination file path
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+<ResponseExample>
+```json 200
+{}
+```
+
+```json 404
+{
+  "code": "FILE_NOT_FOUND",
+  "message": "source file not found"
+}
+```
+</ResponseExample>
+
+---
+
+## Search for Files
+
+<RequestExample>
+```bash cURL All Files
+curl -X GET "http://localhost:44772/files/search?path=/workspace" \
+  -H "X-EXECD-ACCESS-TOKEN: your-token"
+```
+
+```bash cURL Pattern
+curl -X GET "http://localhost:44772/files/search?path=/workspace&pattern=**/*.py" \
+  -H "X-EXECD-ACCESS-TOKEN: your-token"
+```
+
+```python Python
+import requests
+
+response = requests.get(
+    "http://localhost:44772/files/search",
+    headers={"X-EXECD-ACCESS-TOKEN": "your-token"},
+    params={
+        "path": "/workspace",
+        "pattern": "**/*.py"
+    }
+)
+
+files = response.json()
+for file in files:
+    print(f"{file['path']} ({file['size']} bytes)")
+```
+</RequestExample>
+
+Searches for files matching a glob pattern within a specified directory and its subdirectories. Returns file metadata including path, permissions, owner, and group.
+
+<ParamField query="path" type="string" required>
+  Root directory path to search in
+</ParamField>
+
+<ParamField query="pattern" type="string" default="**">
+  Glob pattern to match files. Supports patterns like:
+  - `**` - All files recursively
+  - `*.txt` - All .txt files in directory
+  - `**/*.py` - All .py files recursively
+  - `test_*.py` - Files starting with "test_"
+</ParamField>
+
+<ResponseField name="files" type="array">
+  Array of matching FileInfo objects
+  
+  <Expandable title="FileInfo properties">
+    <ResponseField name="path" type="string">
+      Absolute file path
+    </ResponseField>
+    
+    <ResponseField name="size" type="integer">
+      File size in bytes
+    </ResponseField>
+    
+    <ResponseField name="modified_at" type="string">
+      Last modification time
+    </ResponseField>
+    
+    <ResponseField name="created_at" type="string">
+      File creation time
+    </ResponseField>
+    
+    <ResponseField name="owner" type="string">
+      File owner username
+    </ResponseField>
+    
+    <ResponseField name="group" type="string">
+      File group name
+    </ResponseField>
+    
+    <ResponseField name="mode" type="integer">
+      File permissions in octal format
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+<ResponseExample>
+```json 200
+[
+  {
+    "path": "/workspace/main.py",
+    "size": 1024,
+    "modified_at": "2025-11-16T14:30:45Z",
+    "created_at": "2025-11-16T14:30:45Z",
+    "owner": "admin",
+    "group": "admin",
+    "mode": 644
+  },
+  {
+    "path": "/workspace/tests/test_main.py",
+    "size": 512,
+    "modified_at": "2025-11-16T15:20:10Z",
+    "created_at": "2025-11-16T15:20:10Z",
+    "owner": "admin",
+    "group": "admin",
+    "mode": 644
+  }
+]
+```
+</ResponseExample>
+
+---
+
+## Replace File Content
+
+<RequestExample>
+```bash cURL
+curl -X POST http://localhost:44772/files/replace \
+  -H "X-EXECD-ACCESS-TOKEN: your-token" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "/workspace/config.yaml": {
+      "old": "localhost:8080",
+      "new": "0.0.0.0:9090"
+    },
+    "/workspace/app.py": {
+      "old": "DEBUG = True",
+      "new": "DEBUG = False"
+    }
+  }'
+```
+
+```python Python
+import requests
+
+response = requests.post(
+    "http://localhost:44772/files/replace",
+    headers={
+        "X-EXECD-ACCESS-TOKEN": "your-token",
+        "Content-Type": "application/json"
+    },
+    json={
+        "/workspace/config.yaml": {
+            "old": "localhost:8080",
+            "new": "0.0.0.0:9090"
+        }
+    }
+)
+
+if response.status_code == 200:
+    print("Content replaced successfully")
+```
+</RequestExample>
+
+Performs text replacement in one or multiple files. Replaces all occurrences of the old string with the new string (similar to strings.ReplaceAll). Preserves file permissions.
+
+<ParamField body="[path]" type="object" required>
+  Map of file paths to replacement operations
+  
+  <Expandable title="Replacement properties">
+    <ParamField body="old" type="string" required>
+      String to be replaced
+    </ParamField>
+    
+    <ParamField body="new" type="string" required>
+      Replacement string
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+<ResponseExample>
+```json 200
+{}
+```
+</ResponseExample>
+
+---
+
+## Upload Files
+
+<RequestExample>
+```bash cURL
+curl -X POST http://localhost:44772/files/upload \
+  -H "X-EXECD-ACCESS-TOKEN: your-token" \
+  -F 'metadata={"path":"/workspace/file.txt","owner":"admin","group":"admin","mode":644}' \
+  -F 'file=@/local/path/file.txt'
+```
+
+```python Python
+import requests
+import json
+
+metadata = {
+    "path": "/workspace/upload.txt",
+    "owner": "admin",
+    "group": "admin",
+    "mode": 644
+}
+
+files = {
+    'metadata': (None, json.dumps(metadata), 'application/json'),
+    'file': ('upload.txt', open('/local/path/file.txt', 'rb'), 'application/octet-stream')
+}
+
+response = requests.post(
+    "http://localhost:44772/files/upload",
+    headers={"X-EXECD-ACCESS-TOKEN": "your-token"},
+    files=files
+)
+
+if response.status_code == 200:
+    print("File uploaded successfully")
+```
+</RequestExample>
+
+Uploads one or multiple files to specified paths within the sandbox. Uses multipart form data with metadata and file content.
+
+<ParamField body="metadata" type="string" required>
+  JSON-encoded file metadata
+  
+  <Expandable title="Metadata properties">
+    <ParamField body="path" type="string" required>
+      Target file path in the sandbox
+    </ParamField>
+    
+    <ParamField body="owner" type="string">
+      File owner username
+    </ParamField>
+    
+    <ParamField body="group" type="string">
+      File group name
+    </ParamField>
+    
+    <ParamField body="mode" type="integer">
+      File permissions in octal format
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+<ParamField body="file" type="binary" required>
+  File content (binary)
+</ParamField>
+
+<ResponseExample>
+```json 200
+{}
+```
+</ResponseExample>
+
+---
+
+## Download File
+
+<RequestExample>
+```bash cURL
+curl -X GET "http://localhost:44772/files/download?path=/workspace/data.csv" \
+  -H "X-EXECD-ACCESS-TOKEN: your-token" \
+  -o data.csv
+```
+
+```bash cURL Partial (Range)
+curl -X GET "http://localhost:44772/files/download?path=/workspace/large.bin" \
+  -H "X-EXECD-ACCESS-TOKEN: your-token" \
+  -H "Range: bytes=0-1023" \
+  -o partial.bin
+```
+
+```python Python
+import requests
+
+response = requests.get(
+    "http://localhost:44772/files/download",
+    headers={"X-EXECD-ACCESS-TOKEN": "your-token"},
+    params={"path": "/workspace/data.csv"},
+    stream=True
+)
+
+if response.status_code == 200:
+    with open('data.csv', 'wb') as f:
+        for chunk in response.iter_content(chunk_size=8192):
+            f.write(chunk)
+    print("File downloaded successfully")
+```
+</RequestExample>
+
+Downloads a file from the specified path within the sandbox. Supports HTTP range requests for resumable downloads and partial content retrieval.
+
+<ParamField query="path" type="string" required>
+  Absolute or relative path of the file to download
+</ParamField>
+
+<ParamField header="Range" type="string">
+  HTTP Range header for partial content requests (e.g., "bytes=0-1023")
+</ParamField>
+
+<ResponseField name="body" type="binary">
+  File content as binary stream
+</ResponseField>
+
+<ResponseField name="Content-Disposition" type="string" header>
+  Attachment header with filename
+</ResponseField>
+
+<ResponseField name="Content-Length" type="integer" header>
+  File size in bytes (or range size for partial requests)
+</ResponseField>
+
+<ResponseField name="Content-Range" type="string" header>
+  Range of bytes being returned (only for 206 responses)
+</ResponseField>
+
+<ResponseExample>
+```text 200
+[Binary file content]
+```
+
+```text 206 Partial Content
+[Partial binary file content]
+```
+
+```json 404
+{
+  "code": "FILE_NOT_FOUND",
+  "message": "file not found"
+}
+```
+
+```json 416
+{
+  "code": "RANGE_NOT_SATISFIABLE",
+  "message": "requested range not satisfiable"
+}
+```
+</ResponseExample>
+
+---
+
+## Create Directories
+
+<RequestExample>
+```bash cURL
+curl -X POST http://localhost:44772/directories \
+  -H "X-EXECD-ACCESS-TOKEN: your-token" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "/workspace/project": {
+      "owner": "admin",
+      "group": "admin",
+      "mode": 755
+    },
+    "/workspace/logs": {
+      "owner": "admin",
+      "group": "admin",
+      "mode": 755
+    }
+  }'
+```
+
+```python Python
+import requests
+
+response = requests.post(
+    "http://localhost:44772/directories",
+    headers={
+        "X-EXECD-ACCESS-TOKEN": "your-token",
+        "Content-Type": "application/json"
+    },
+    json={
+        "/workspace/project": {
+            "owner": "admin",
+            "group": "admin",
+            "mode": 755
+        }
+    }
+)
+
+if response.status_code == 200:
+    print("Directories created")
+```
+</RequestExample>
+
+Creates one or multiple directories with specified permissions. Creates parent directories as needed (similar to `mkdir -p`).
+
+<ParamField body="[path]" type="object" required>
+  Map of directory paths to Permission objects
+  
+  <Expandable title="Permission properties">
+    <ParamField body="owner" type="string">
+      Owner username
+    </ParamField>
+    
+    <ParamField body="group" type="string">
+      Group name
+    </ParamField>
+    
+    <ParamField body="mode" type="integer" required>
+      Permission mode in octal format (e.g., 755)
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+<ResponseExample>
+```json 200
+{}
+```
+</ResponseExample>
+
+---
+
+## Delete Directories
+
+<RequestExample>
+```bash cURL
+curl -X DELETE "http://localhost:44772/directories?path=/workspace/temp" \
+  -H "X-EXECD-ACCESS-TOKEN: your-token"
+```
+
+```python Python
+import requests
+
+response = requests.delete(
+    "http://localhost:44772/directories",
+    headers={"X-EXECD-ACCESS-TOKEN": "your-token"},
+    params={"path": ["/workspace/temp", "/workspace/old_logs"]}
+)
+
+if response.status_code == 200:
+    print("Directories deleted")
+```
+</RequestExample>
+
+Recursively deletes one or multiple directories and all their contents. Similar to `rm -rf`. Use with caution as this operation cannot be undone.
+
+<Warning>
+This operation permanently deletes directories and all their contents. There is no way to recover deleted data.
+</Warning>
+
+<ParamField query="path" type="array" required>
+  Directory path(s) to delete (can be specified multiple times)
+</ParamField>
+
+<ResponseExample>
+```json 200
+{}
+```
+</ResponseExample>
+
+## File Permissions
+
+Unix-style file permissions use octal notation:
+
+| Octal | Binary | Permissions | Description |
+|-------|--------|-------------|-------------|
+| 755 | 111 101 101 | rwxr-xr-x | Owner: read+write+execute, Group/Others: read+execute |
+| 644 | 110 100 100 | rw-r--r-- | Owner: read+write, Group/Others: read only |
+| 600 | 110 000 000 | rw------- | Owner: read+write, Group/Others: no access |
+| 777 | 111 111 111 | rwxrwxrwx | Everyone: full access (use with caution) |
+
+### Permission Breakdown
+
+- **First digit**: Owner permissions
+- **Second digit**: Group permissions
+- **Third digit**: Others permissions
+
+Each digit is the sum of:
+- **4** = Read (r)
+- **2** = Write (w)
+- **1** = Execute (x)
+
+### Examples
+
+```json
+// Executable script
+{
+  "mode": 755,  // Owner can modify, everyone can read/execute
+  "owner": "admin",
+  "group": "admin"
+}
+
+// Configuration file
+{
+  "mode": 644,  // Owner can modify, everyone can read
+  "owner": "admin",
+  "group": "admin"
+}
+
+// Private key
+{
+  "mode": 600,  // Only owner can read/write
+  "owner": "admin",
+  "group": "admin"
+}
+```

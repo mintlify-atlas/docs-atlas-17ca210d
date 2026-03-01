@@ -1,0 +1,648 @@
+---
+title: Reinforcement Learning Training
+description: Train RL agents in isolated sandboxes with full observability and reproducibility
+---
+
+OpenSandbox provides isolated environments for training reinforcement learning agents, enabling safe experimentation with simulations, hyperparameter tuning, and distributed training workflows.
+
+## Overview
+
+RL training in OpenSandbox offers:
+
+- **Isolated training runs** - Each experiment runs in a clean container
+- **Reproducible environments** - Consistent package versions and configurations
+- **Resource control** - CPU, memory, and GPU allocation per training job
+- **Full observability** - Capture logs, metrics, and checkpoints
+- **Distributed training** - Scale across multiple sandboxes
+- **Dependency isolation** - No conflicts between different RL frameworks
+
+## Quick Start
+
+### 1. Start OpenSandbox Server
+
+```bash
+uv pip install opensandbox-server
+opensandbox-server init-config ~/.sandbox.toml --example docker
+opensandbox-server
+```
+
+### 2. Run RL Training Example
+
+```python
+import asyncio
+import os
+from datetime import timedelta
+from opensandbox import Sandbox
+from opensandbox.config import ConnectionConfig
+
+async def train_rl_agent():
+    sandbox = await Sandbox.create(
+        "opensandbox/code-interpreter:v1.0.1",
+        connection_config=ConnectionConfig(domain="localhost:8080"),
+        env={"RL_TIMESTEPS": "5000"},
+        timeout=timedelta(minutes=10)
+    )
+    
+    async with sandbox:
+        # Install RL dependencies
+        await sandbox.files.write_file("requirements.txt", """
+        gymnasium
+        stable-baselines3
+        tensorboard
+        """)
+        
+        result = await sandbox.commands.run(
+            "python3 -m pip install -r requirements.txt"
+        )
+        
+        # Upload training script
+        training_script = load_training_script()  # See example below
+        await sandbox.files.write_file("train.py", training_script)
+        
+        # Run training
+        train_result = await sandbox.commands.run("python3 train.py")
+        
+        # Get results
+        summary = await sandbox.files.read_file("training_summary.json")
+        print(summary)
+        
+        await sandbox.kill()
+
+asyncio.run(train_rl_agent())
+```
+
+View the complete example: [`examples/rl-training/`](https://github.com/opensandbox-io/opensandbox/tree/main/examples/rl-training)
+
+## Training Script Example
+
+The example uses Stable-Baselines3 to train a DQN agent on CartPole:
+
+```python
+import json
+import os
+import gymnasium as gym
+from stable_baselines3 import DQN
+from stable_baselines3.common.evaluation import evaluate_policy
+
+# Configuration from environment
+timesteps = int(os.getenv("RL_TIMESTEPS", "5000"))
+tensorboard_log = os.getenv("RL_TENSORBOARD_LOG", "runs")
+
+# Create environment
+env = gym.make("CartPole-v1")
+
+# Create DQN model
+model = DQN(
+    "MlpPolicy",
+    env,
+    verbose=1,
+    tensorboard_log=tensorboard_log,
+    learning_rate=1e-3,
+    buffer_size=10000,
+    learning_starts=1000,
+    batch_size=32,
+    train_freq=4,
+    gradient_steps=1,
+)
+
+# Train the agent
+model.learn(total_timesteps=timesteps)
+
+# Save checkpoint
+os.makedirs("checkpoints", exist_ok=True)
+checkpoint_path = "checkpoints/cartpole_dqn"
+model.save(checkpoint_path)
+
+# Evaluate
+mean_reward, std_reward = evaluate_policy(model, env, n_eval_episodes=5)
+
+# Save summary
+summary = {
+    "timesteps": timesteps,
+    "mean_reward": float(mean_reward),
+    "std_reward": float(std_reward),
+    "checkpoint_path": f"{checkpoint_path}.zip",
+}
+
+with open("training_summary.json", "w") as f:
+    json.dump(summary, f, indent=2)
+
+print("Training summary:", summary)
+env.close()
+```
+
+## Use Cases
+
+### Hyperparameter Tuning
+
+Run parallel experiments with different hyperparameters:
+
+```python
+import asyncio
+from typing import List, Dict
+
+async def tune_hyperparameters(configs: List[Dict]):
+    tasks = []
+    
+    for i, config in enumerate(configs):
+        task = train_with_config(config, run_id=i)
+        tasks.append(task)
+    
+    results = await asyncio.gather(*tasks)
+    
+    # Find best configuration
+    best = max(results, key=lambda r: r["mean_reward"])
+    print(f"Best config: {best}")
+    return best
+
+async def train_with_config(config: Dict, run_id: int):
+    sandbox = await Sandbox.create(
+        "opensandbox/code-interpreter:v1.0.1",
+        env={
+            "LEARNING_RATE": str(config["lr"]),
+            "BATCH_SIZE": str(config["batch_size"]),
+            "RUN_ID": str(run_id)
+        }
+    )
+    
+    async with sandbox:
+        # Install deps
+        await install_rl_dependencies(sandbox)
+        
+        # Upload training script
+        await sandbox.files.write_file("train.py", training_script)
+        
+        # Train
+        await sandbox.commands.run("python3 train.py")
+        
+        # Get results
+        summary = await sandbox.files.read_file("training_summary.json")
+        result = json.loads(summary)
+        result["config"] = config
+        
+        await sandbox.kill()
+        return result
+
+# Run tuning
+configs = [
+    {"lr": 1e-3, "batch_size": 32},
+    {"lr": 1e-4, "batch_size": 64},
+    {"lr": 5e-4, "batch_size": 128},
+]
+
+asyncio.run(tune_hyperparameters(configs))
+```
+
+### Multi-Environment Training
+
+Train on multiple environments simultaneously:
+
+```python
+async def train_multiple_environments(environments: List[str]):
+    tasks = [
+        train_on_environment(env_name)
+        for env_name in environments
+    ]
+    
+    results = await asyncio.gather(*tasks)
+    return results
+
+async def train_on_environment(env_name: str):
+    sandbox = await Sandbox.create(
+        "opensandbox/code-interpreter:v1.0.1",
+        env={"GYM_ENV": env_name}
+    )
+    
+    async with sandbox:
+        await install_rl_dependencies(sandbox)
+        await sandbox.files.write_file("train.py", training_script)
+        await sandbox.commands.run("python3 train.py")
+        
+        summary = await sandbox.files.read_file("training_summary.json")
+        await sandbox.kill()
+        return json.loads(summary)
+
+# Train on multiple environments
+envs = ["CartPole-v1", "MountainCar-v0", "Acrobot-v1"]
+results = asyncio.run(train_multiple_environments(envs))
+```
+
+### Checkpoint Management
+
+Save and restore training checkpoints:
+
+```python
+async def save_checkpoint(sandbox: Sandbox, checkpoint_name: str):
+    # Download checkpoint from sandbox
+    checkpoint_data = await sandbox.files.read_file(
+        f"checkpoints/{checkpoint_name}.zip",
+        binary=True
+    )
+    
+    # Save to external storage
+    with open(f"./local_checkpoints/{checkpoint_name}.zip", "wb") as f:
+        f.write(checkpoint_data)
+
+async def resume_training(checkpoint_path: str):
+    sandbox = await Sandbox.create("opensandbox/code-interpreter:v1.0.1")
+    
+    async with sandbox:
+        # Upload checkpoint
+        with open(checkpoint_path, "rb") as f:
+            checkpoint_data = f.read()
+        
+        await sandbox.files.write_file(
+            "checkpoint.zip",
+            checkpoint_data,
+            binary=True
+        )
+        
+        # Resume training
+        resume_script = """
+import gymnasium as gym
+from stable_baselines3 import DQN
+
+env = gym.make("CartPole-v1")
+model = DQN.load("checkpoint.zip", env=env)
+model.learn(total_timesteps=10000)  # Continue training
+model.save("checkpoints/resumed")
+        """
+        
+        await sandbox.files.write_file("resume.py", resume_script)
+        await sandbox.commands.run("python3 resume.py")
+        
+        await sandbox.kill()
+```
+
+### TensorBoard Monitoring
+
+Visualize training metrics with TensorBoard:
+
+```python
+async def train_with_tensorboard():
+    sandbox = await Sandbox.create("opensandbox/code-interpreter:v1.0.1")
+    
+    async with sandbox:
+        await install_rl_dependencies(sandbox)
+        
+        # Start TensorBoard in background
+        await sandbox.commands.run(
+            "tensorboard --logdir runs --host 0.0.0.0 --port 6006",
+            opts=RunCommandOpts(background=True)
+        )
+        
+        # Get TensorBoard endpoint
+        tb_endpoint = await sandbox.get_endpoint(6006)
+        print(f"TensorBoard: http://{tb_endpoint.endpoint}")
+        
+        # Run training
+        await sandbox.files.write_file("train.py", training_script)
+        await sandbox.commands.run("python3 train.py")
+        
+        # Keep sandbox alive to view TensorBoard
+        await asyncio.sleep(600)  # 10 minutes
+        await sandbox.kill()
+```
+
+### Custom RL Frameworks
+
+Train with different RL libraries:
+
+#### Ray RLlib
+
+```python
+rllib_requirements = """
+ray[rllib]
+tensorflow
+torch
+"""
+
+rllib_script = """
+import ray
+from ray import tune
+from ray.rllib.algorithms.ppo import PPOConfig
+
+ray.init()
+
+config = PPOConfig().environment("CartPole-v1")
+algo = config.build()
+
+for i in range(10):
+    result = algo.train()
+    print(f"Iteration {i}: reward={result['episode_reward_mean']}")
+
+algo.save("checkpoints/rllib_ppo")
+ray.shutdown()
+"""
+```
+
+#### CleanRL
+
+```python
+cleanrl_requirements = """
+gymnasium
+torch
+tensorboard
+"""
+
+cleanrl_script = """
+# Use CleanRL's single-file implementations
+import gymnasium as gym
+import torch
+import torch.nn as nn
+import numpy as np
+
+# DQN implementation from CleanRL
+# ... (simplified for brevity)
+"""
+```
+
+## Environment Configuration
+
+### Environment Variables
+
+```python
+sandbox = await Sandbox.create(
+    "opensandbox/code-interpreter:v1.0.1",
+    env={
+        "RL_TIMESTEPS": "10000",
+        "RL_TENSORBOARD_LOG": "runs",
+        "LEARNING_RATE": "1e-3",
+        "BATCH_SIZE": "64",
+        "GAMMA": "0.99",
+        "GYM_ENV": "CartPole-v1"
+    }
+)
+```
+
+### Resource Allocation
+
+```python
+sandbox = await Sandbox.create(
+    "opensandbox/code-interpreter:v1.0.1",
+    memory_limit="4Gi",
+    cpu_limit="4",
+    timeout=timedelta(hours=2)
+)
+```
+
+### GPU Support
+
+```python
+# Use GPU-enabled image
+sandbox = await Sandbox.create(
+    "opensandbox/code-interpreter-gpu:v1.0.1",
+    gpu_count=1,
+    memory_limit="8Gi"
+)
+```
+
+## Supported RL Frameworks
+
+### Stable-Baselines3
+
+```bash
+pip install stable-baselines3[extra]
+```
+
+Supports: DQN, A2C, PPO, SAC, TD3, DDPG
+
+### Ray RLlib
+
+```bash
+pip install ray[rllib]
+```
+
+Supports: PPO, DQN, APEX, IMPALA, A3C, DDPG, TD3, SAC
+
+### TF-Agents
+
+```bash
+pip install tf-agents
+```
+
+Supports: DQN, DDPG, TD3, SAC, PPO, REINFORCE
+
+### CleanRL
+
+```bash
+pip install cleanrl
+```
+
+Single-file implementations of popular algorithms
+
+### Gymnasium Environments
+
+```python
+# Classic control
+env = gym.make("CartPole-v1")
+env = gym.make("MountainCar-v0")
+env = gym.make("Acrobot-v1")
+
+# Atari
+env = gym.make("ALE/Pong-v5")
+env = gym.make("ALE/Breakout-v5")
+
+# MuJoCo
+env = gym.make("HalfCheetah-v4")
+env = gym.make("Ant-v4")
+```
+
+## Performance Optimization
+
+### Vectorized Environments
+
+```python
+from stable_baselines3.common.vec_env import SubprocVecEnv
+from stable_baselines3 import PPO
+
+def make_env():
+    def _init():
+        env = gym.make("CartPole-v1")
+        return env
+    return _init
+
+num_envs = 4
+env = SubprocVecEnv([make_env() for _ in range(num_envs)])
+model = PPO("MlpPolicy", env, verbose=1)
+model.learn(total_timesteps=10000)
+```
+
+### Parallel Training
+
+```python
+async def parallel_training(num_runs: int):
+    tasks = [
+        train_agent(seed=i)
+        for i in range(num_runs)
+    ]
+    
+    results = await asyncio.gather(*tasks)
+    return results
+
+async def train_agent(seed: int):
+    sandbox = await Sandbox.create(
+        "opensandbox/code-interpreter:v1.0.1",
+        env={"SEED": str(seed)}
+    )
+    
+    async with sandbox:
+        # Training with specific seed
+        await sandbox.files.write_file("train.py", training_script)
+        await sandbox.commands.run("python3 train.py")
+        
+        summary = await sandbox.files.read_file("training_summary.json")
+        await sandbox.kill()
+        return json.loads(summary)
+```
+
+### Checkpointing Strategy
+
+```python
+# Save checkpoints periodically
+for i in range(10):
+    model.learn(total_timesteps=1000)
+    
+    # Save checkpoint
+    model.save(f"checkpoints/step_{i * 1000}")
+    
+    # Evaluate
+    mean_reward, _ = evaluate_policy(model, env, n_eval_episodes=5)
+    print(f"Step {i * 1000}: {mean_reward}")
+```
+
+## Troubleshooting
+
+### Dependency Installation Failed
+
+Use the Python environment helper:
+
+```python
+def with_python_env(command: str) -> str:
+    return (
+        "bash -lc '"
+        "source /opt/opensandbox/code-interpreter-env.sh "
+        "python ${PYTHON_VERSION:-3.14} >/dev/null "
+        "&& "
+        f"{command}"
+        "'"
+    )
+
+# Install with proper environment
+await sandbox.commands.run(
+    with_python_env("python3 -m pip install stable-baselines3")
+)
+```
+
+### Out of Memory
+
+Increase memory limit:
+
+```python
+sandbox = await Sandbox.create(
+    "opensandbox/code-interpreter:v1.0.1",
+    memory_limit="8Gi"  # Increase from default
+)
+```
+
+### Training Timeout
+
+Increase timeout or reduce timesteps:
+
+```python
+sandbox = await Sandbox.create(
+    "opensandbox/code-interpreter:v1.0.1",
+    timeout=timedelta(hours=4),  # Longer timeout
+    env={"RL_TIMESTEPS": "50000"}  # Or fewer timesteps
+)
+```
+
+### GPU Not Available
+
+Verify GPU support:
+
+```python
+result = await sandbox.commands.run("python3 -c 'import torch; print(torch.cuda.is_available())'")
+for line in result.logs.stdout:
+    print(line.text)
+```
+
+## Best Practices
+
+### 1. Use Ephemeral Sandboxes
+
+```python
+# Create fresh sandbox for each run
+async def run_experiment():
+    sandbox = await Sandbox.create("opensandbox/code-interpreter:v1.0.1")
+    try:
+        # Training code
+        pass
+    finally:
+        await sandbox.kill()  # Always cleanup
+```
+
+### 2. Log Everything
+
+```python
+# Capture all outputs
+result = await sandbox.commands.run("python3 train.py")
+
+for line in result.logs.stdout:
+    print(f"[stdout] {line.text}")
+
+for line in result.logs.stderr:
+    print(f"[stderr] {line.text}")
+
+if result.error:
+    print(f"[error] {result.error.name}: {result.error.value}")
+```
+
+### 3. Save Artifacts
+
+```python
+# Save checkpoints, logs, and metrics
+checkpoint = await sandbox.files.read_file("checkpoints/model.zip", binary=True)
+summary = await sandbox.files.read_file("training_summary.json")
+
+# Save to external storage
+with open("./artifacts/model.zip", "wb") as f:
+    f.write(checkpoint)
+
+with open("./artifacts/summary.json", "w") as f:
+    f.write(summary)
+```
+
+### 4. Set Reproducible Seeds
+
+```python
+training_script = """
+import random
+import numpy as np
+import torch
+
+seed = int(os.getenv("SEED", "42"))
+random.seed(seed)
+np.random.seed(seed)
+torch.manual_seed(seed)
+
+# Training code...
+"""
+```
+
+## Related Resources
+
+<CardGroup cols={2}>
+  <Card title="RL Training Example" icon="brain" href="https://github.com/opensandbox-io/opensandbox/tree/main/examples/rl-training">
+    Complete RL training example with DQN
+  </Card>
+  <Card title="AI Coding Agents" icon="robot" href="/use-cases/coding-agents">
+    AI agents for code generation
+  </Card>
+  <Card title="Python SDK" icon="python" href="/sdks/python">
+    SDK reference documentation
+  </Card>
+  <Card title="API Reference" icon="code" href="/api-reference">
+    Full API documentation
+  </Card>
+</CardGroup>
