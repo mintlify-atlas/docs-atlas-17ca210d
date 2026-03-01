@@ -1,0 +1,182 @@
+{
+  "projectType": "infrastructure",
+  "projectName": "OpenSandbox",
+  "projectDescription": "General-purpose sandbox platform for AI applications with multi-language SDKs, unified APIs, and Docker/Kubernetes runtimes",
+  "theme": "aspen",
+  "primaryColor": "#FF6B35",
+  "lightColor": "#FFA07A",
+  "darkColor": "#E65100",
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Get Started",
+            "pages": [
+              "introduction",
+              "quickstart",
+              "installation"
+            ]
+          },
+          {
+            "group": "Core Concepts",
+            "pages": [
+              "concepts/architecture",
+              "concepts/sandbox-lifecycle",
+              "concepts/execution-api",
+              "concepts/networking"
+            ]
+          },
+          {
+            "group": "Deployment",
+            "pages": [
+              "deployment/docker-runtime",
+              "deployment/kubernetes-runtime",
+              "deployment/configuration",
+              "deployment/security"
+            ]
+          },
+          {
+            "group": "SDKs",
+            "pages": [
+              "sdks/overview",
+              "sdks/python",
+              "sdks/javascript",
+              "sdks/kotlin",
+              "sdks/csharp",
+              "sdks/code-interpreter"
+            ]
+          },
+          {
+            "group": "Components",
+            "pages": [
+              "components/server",
+              "components/execd",
+              "components/ingress",
+              "components/egress"
+            ]
+          },
+          {
+            "group": "Use Cases",
+            "pages": [
+              "use-cases/coding-agents",
+              "use-cases/browser-automation",
+              "use-cases/remote-development",
+              "use-cases/rl-training"
+            ]
+          },
+          {
+            "group": "Operations",
+            "pages": [
+              "operations/monitoring",
+              "operations/resource-management",
+              "operations/troubleshooting"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "API Reference",
+        "groups": [
+          {
+            "group": "Lifecycle API",
+            "pages": [
+              "api/lifecycle/overview",
+              "api/lifecycle/create-sandbox",
+              "api/lifecycle/manage-sandbox",
+              "api/lifecycle/endpoints"
+            ]
+          },
+          {
+            "group": "Execution API",
+            "pages": [
+              "api/execution/overview",
+              "api/execution/code-interpreter",
+              "api/execution/commands",
+              "api/execution/filesystem",
+              "api/execution/metrics"
+            ]
+          },
+          {
+            "group": "SDK Reference",
+            "pages": [
+              "api/sdk/python-reference",
+              "api/sdk/javascript-reference",
+              "api/sdk/kotlin-reference",
+              "api/sdk/csharp-reference"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "Examples",
+        "groups": [
+          {
+            "group": "Getting Started",
+            "pages": [
+              "examples/basic-sandbox",
+              "examples/code-interpreter-basics",
+              "examples/file-operations"
+            ]
+          },
+          {
+            "group": "AI Coding Agents",
+            "pages": [
+              "examples/claude-code",
+              "examples/gemini-cli",
+              "examples/langgraph-integration"
+            ]
+          },
+          {
+            "group": "Browser & Desktop",
+            "pages": [
+              "examples/chrome-automation",
+              "examples/playwright",
+              "examples/vscode-server",
+              "examples/desktop-environment"
+            ]
+          },
+          {
+            "group": "Advanced",
+            "pages": [
+              "examples/kubernetes-deployment",
+              "examples/batch-sandboxes",
+              "examples/rl-training"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "Multi-language SDKs (Python, JavaScript, Kotlin, C#)",
+    "Docker and Kubernetes runtime support",
+    "Code Interpreter with Jupyter integration",
+    "File system operations and command execution",
+    "Network ingress/egress controls",
+    "Resource pooling and batch sandbox creation",
+    "Browser automation and desktop environments",
+    "AI coding agent integrations"
+  ],
+  "publicApiSurface": [
+    "Sandbox.create() - Create sandbox instances",
+    "sandbox.commands.run() - Execute shell commands",
+    "sandbox.files.write_file() - Write files to sandbox",
+    "sandbox.files.read_file() - Read files from sandbox",
+    "CodeInterpreter.create() - Create code execution contexts",
+    "interpreter.codes.run() - Execute code in multiple languages",
+    "sandbox.pause() - Pause sandbox execution",
+    "sandbox.resume() - Resume paused sandbox",
+    "sandbox.renew_expiration() - Extend sandbox lifetime",
+    "sandbox.get_endpoint() - Get public endpoint for sandbox ports",
+    "POST /v1/sandboxes - Lifecycle API: Create sandbox",
+    "GET /v1/sandboxes/{id} - Lifecycle API: Get sandbox details",
+    "DELETE /v1/sandboxes/{id} - Lifecycle API: Delete sandbox",
+    "POST /code - Execution API: Execute code",
+    "POST /command - Execution API: Run shell command",
+    "POST /files/upload - Execution API: Upload files",
+    "GET /files/download - Execution API: Download files",
+    "GET /metrics/watch - Execution API: Stream system metrics"
+  ]
+}
